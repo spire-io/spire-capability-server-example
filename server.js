@@ -7,9 +7,7 @@ if (!process.env.SPIRE_KEY){
 }
 
 var spire = new Spire({key: process.env.SPIRE_KEY});
-var app = express.createServer(
-  express.static(__dirname + '/public')
-);
+
 var clientSubscription;
 var clientPublishableChannel;
 
@@ -49,6 +47,10 @@ spire.messages.subscribe(
   }
 );
 
+var app = express.createServer(
+  express.static(__dirname + '/public')
+);
+
 app.get(
   '/discover',
   function(req, res){
@@ -61,7 +63,6 @@ app.get(
     res.send(JSON.stringify(description));
   }
 );
-
 
 var doit = function(){
   if (clientPublishableChannel && clientSubscription){
