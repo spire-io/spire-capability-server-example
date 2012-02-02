@@ -7,24 +7,9 @@ if (!process.env.SPIRE_KEY){
 }
 
 var spire = new Spire({key: process.env.SPIRE_KEY});
-
 var app = express.createServer(
   express.static(__dirname + '/public')
 );
-
-app.get(
-  '/discover',
-  function(req, res){
-    var description = {
-      channel: clientPublishableChannel,
-      subscription: clientSubscription
-    };
-
-    res.contentType('application/json');
-    res.send(JSON.stringify(description));
-  }
-);
-
 var clientSubscription;
 var clientPublishableChannel;
 
@@ -63,6 +48,20 @@ spire.messages.subscribe(
     }
   }
 );
+
+app.get(
+  '/discover',
+  function(req, res){
+    var description = {
+      channel: clientPublishableChannel,
+      subscription: clientSubscription
+    };
+
+    res.contentType('application/json');
+    res.send(JSON.stringify(description));
+  }
+);
+
 
 var doit = function(){
   if (clientPublishableChannel && clientSubscription){
