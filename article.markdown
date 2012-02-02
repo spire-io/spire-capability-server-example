@@ -1,6 +1,9 @@
 Clever with Capabilities
 ========================
 
+(The code for this article is [available on
+github](https://github.com/thedaniel/spire-capability-server-example))
+
 Spire.io APIs use something called a *capability* for authentication and
 authorization. (To learn more about capabilities, see our [previous
 post](http://TODO) on the topic.) Essentially, instead of giving users a
@@ -20,7 +23,8 @@ different aspects of your app. We're big fans of node.js at Spire.io, so this
 example will use node's Express web framework to serve up the capabilities to
 the client as well as host the site.
 
-TODO: A nice little chart that show
+TODO: A nice little chart that shows a server full of capabilities sharing them
+selectively with a client.
 
 The Server
 ----------
@@ -83,6 +87,7 @@ to use to create them!
 <script src="https://gist.github.com/1721166.js?file=gistfile1.js"></script>
 
 That's all there is to selectively handing out capabilities with the Spire.io
-API using our JavaScript library.
+API using our JavaScript library. Check out [the code on
+github](https://github.com/thedaniel/spire-capability-server-example)!
 
 TODO snappy conclusion
