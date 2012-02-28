@@ -6,14 +6,15 @@ github](https://github.com/thedaniel/spire-capability-server-example))
 
 Spire.io APIs use something called a *capability* for authentication and
 authorization. (To learn more about capabilities, see our [previous
-post](http://TODO) on the topic.) Essentially, instead of giving users a
-session and then checking the user's permissions for each action, we give users
-an encrypted key that is tied specifically to an action they are allowed to
-take. For example, with the "create channel" capability, for the account
-"alice", any client that knows that capability can create as many channels for
-alice as they want, but can't take any other action on alice's account. This is
-very different than the situation where alice's session key is compromised in a
-typical application, and an implementation of the [principle of least
+post](http://www.spire.io/posts/web-capabilities.html) on the topic.)
+Essentially, instead of giving users a session and then checking the user's
+permissions for each action, we give users an encrypted key that is tied
+specifically to an action they are allowed to take. For example, with the
+"create channel" capability, for the account "alice", any client that knows
+that capability can create as many channels for alice as they want, but can't
+take any other action on alice's account. This is very different than the
+situation where alice's session key is compromised in a typical application,
+and an implementation of the [principle of least
 privilege](http://en.wikipedia.org/wiki/Principle_of_least_privilege).
 
 This is an awesome way to manage access both for us the API provider and you
@@ -22,9 +23,6 @@ capabilities provided by Spire.io to manage the access your users have to
 different aspects of your app. We're big fans of node.js at Spire.io, so this
 example will use node's Express web framework to serve up the capabilities to
 the client as well as host the site.
-
-TODO: A nice little chart that shows a server full of capabilities sharing them
-selectively with a client.
 
 The Server
 ----------
@@ -39,15 +37,9 @@ We're going to have two channels, `client-publishable-channel` and
 `client-subscribable-channel`. I imagine you can guess what capabilities we'll
 be sharing with the client for each.
 
-(TODO - I think diving into spire.requests is unfortunate, but it's the only
-way to get a handle on the newly created channel and later in the client code
-the only way to use capabilities directly. Depending on when this blog post is
-published, we can either rewrite the server code or insert a paragraph here
-explaining why we're going into spire.requests)
-
-Below is the callback we'll pass in when we connect to Spire.io. We use the
-requests module of the Spire.io library to create the channel and subscription
-and assign them to the variables we initialized earlier.
+Below is the callback we'll pass in when we connect to Spire.io. We use helper
+methods from the Spire.io library to create the channel and subscription and
+assign their url and capabilities to the variables we initialized earlier.
 
 <script src="https://gist.github.com/1721075.js?file=gistfile1.js"></script>
 
@@ -77,17 +69,28 @@ been created before launching:
 The Client
 ----------
 
-Now that our client has the capabilities, it needs to use them. Below's all the
-javascript we need. You'll notice that we get `/discover` as the callback for
-`spire.connect()` - this makes sure that we've already fetched the description
-resource of the Spire.io API. Otherwise, when we tried to create our channel
-and subscription, our `spire` object wouldn't know what URLs and content types
-to use to create them!
+Now that our client has the capabilities, it needs to use them. Below is all the
+JavaScript we need. It should be fairly self-explanatory if you've read the 
+[Spire.io.js README](https://github.com/spire-io/spire.io.js/blob/master/README.md)
+ and followed the code above.
 
 <script src="https://gist.github.com/1721166.js?file=gistfile1.js"></script>
 
 That's all there is to selectively handing out capabilities with the Spire.io
-API using our JavaScript library. Check out [the code on
-github](https://github.com/thedaniel/spire-capability-server-example)!
+API using our JavaScript library. Having this kind of granular authorization
+for resources opens up a huge array of message-based applications. Obviously
+our example is intentionally simplistic, but with only a little more complexity
+you can imagine using a collection of read- and write-only channels to support
+multiplayer gaming, for example, with a server ensuring movements and actions
+are legal before replaying them to clients. (As a matter of fact, we wrote that
+sample code back when we were alpha testing the messaging service - who knows,
+maybe it will see the light someday).
 
-TODO snappy conclusion
+We're really excited about giving application developers flexibility and power
+to be really creative on our platform, and capability-based security is only
+one part of that. If this has inspired you to build a new kind of app based on
+real-time messaging, or if you have questions or comments, please leave them
+below or give us a shout on twitter [@spireio](http://twitter.com/spireio).
+
+Check out [the code on
+github](https://github.com/thedaniel/spire-capability-server-example)!
