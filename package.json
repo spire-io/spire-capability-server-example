@@ -4,7 +4,7 @@
   "description": "A demonstration of centralized discovery and capability management",
   "dependencies": {
     "express": "2.5.0",
-    "shred": "0.7.0",
-    "spire.io.js": "0.2.4"
+    "shred": "0.7.6",
+    "spire.io.js": "git://github.com/spire-io/spire.io.js.git"
   }
 }

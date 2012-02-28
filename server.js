@@ -6,46 +6,47 @@ if (!process.env.SPIRE_KEY){
   process.exit(1);
 }
 
-var spire = new Spire({key: process.env.SPIRE_KEY});
+var spire = new Spire();
+var clientSubscriptionData;
+var clientPublishableChannelData;
 
-var clientSubscription;
-var clientPublishableChannel;
-
-var createAndAssign = function(){
-  spire.requests.channels.create(
-    {name: 'client-publishable-channel'},
+spire.start(process.env.SPIRE_KEY, function(err, session) {
+  spire.channel(
+    'client-publishable-channel',
     function(err, channel){
-      clientPublishableChannel = channel;
+      if (!err) {
+        clientPublishableChannelData = {url: channel.data.url, capability: channel.data.capability};
+      }
     }
   );
 
-  spire.requests.channels.create(
-    {name: 'client-subscribable-channel'},
+  spire.channel(
+    'client-subscribable-channel',
     function(err, channel){
-      spire.requests.subscriptions.create(
-        {
-          channels: [channel],
-          events: ['messages']
-        },
-        function(err, subscription){
-          clientSubscription = subscription;
+      channel.subscription(
+        'clientReadOnlySubscription',
+        function(err2, subscription){
+          clientSubscriptionData = {url: subscription.data.url, capability: subscription.data.capability};
+          spire.subscriptionFromUrlAndCapability(clientSubscriptionData, function(err, subscription) {
+          });
         }
       );
     }
   );
-}
-spire.connect(createAndAssign);
 
-spire.messages.subscribe(
-  'client-publishable-channel',
-  function(err, messages){
-    for (i=0;i<messages.length;i++){
-      var content = messages[i].content;
-      var tnetnoc = content.split('').reverse().join('');
-      spire.messages.publish({channel:'client-subscribable-channel', content:tnetnoc});
+  spire.subscribe(
+    'client-publishable-channel',
+    function(messages){
+      for (var i=0;i<messages.length;i++){
+        var content = messages[i].content;
+        var tnetnoc = content.split('').reverse().join('');
+        spire.publish('client-subscribable-channel', tnetnoc, function(){});
+      }
     }
-  }
-);
+  );
+
+});
+
 
 var app = express.createServer(
   express.static(__dirname + '/public')
@@ -55,17 +56,16 @@ app.get(
   '/discover',
   function(req, res){
     var description = {
-      channel: clientPublishableChannel,
-      subscription: clientSubscription
+      channel: clientPublishableChannelData,
+      subscription: clientSubscriptionData
     };
-
     res.contentType('application/json');
     res.send(JSON.stringify(description));
   }
 );
 
 var doit = function(){
-  if (clientPublishableChannel && clientSubscription){
+  if (clientPublishableChannelData && clientSubscriptionData){
     console.log('discovery success! starting server...');
     app.listen(3000);
   } else {

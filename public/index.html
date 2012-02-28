@@ -5,39 +5,48 @@
     <script type="text/javascript">
       $(function(){
         var Spire = require('./spire.io.js');
-        var spire = new Spire({key: 'dummy key'});
-        spire.connect(function(){
-          $.get('/discover', function(data){
-            var spireSubscription = data.subscription;
-            var spireChannel = data.channel;
+        var Subscription = require('./spire/api/subscription');
+        var spire = new Spire();
+        $.get('/discover', function(data){
+          var spireSubscription;
+          var spireChannel;
 
-            var get = function(){
-              spire.requests.subscriptions.get(
-                {subscription: spireSubscription},
-                function(err, data){
-                  $('.emesrever').val(data.messages[0].content);
-                  get();
-                }
-              );
-            };
-            get();
-
-            $('.loading').hide();
-            $('.content').show();
-        
-            $('.submit.button').click(function(e){
-              e.stopPropagation();
-              e.preventDefault();
-              spire.requests.messages.create({
-                channel: spireChannel,
-                content: $('.reverseme').val()
-              },
-              function(err, msg){
-                console.log('Sent message: ', msg);
-              }
-            );
+          spire.subscriptionFromUrlAndCapability(data.subscription, function(err, subscription) {
+            if (err){
+              console.error(err);
+            }
+            spireSubscription = subscription;
+            spireSubscription.addListener('message', function(message){
+              $('.emesrever').val(message.content);
             });
+            spireSubscription.startListening();
           });
+
+          spire.channelFromUrlAndCapability(data.channel, function(err, channel){
+            spireChannel = channel;
+          });
+
+          var setUpListener = function(){
+            if (spireChannel && spireSubscription) {
+              console.log('Setting up listeners...');
+              $('.loading').hide();
+              $('.content').show();
+
+              $('.submit.button').click(function(e){
+                e.stopPropagation();
+                e.preventDefault();
+                spireChannel.publish($('.reverseme').val(), function(err, msg){
+                  console.log('Sent message: ', msg);
+                });
+              });
+            } else {
+              console.log('waiting for discovery...');
+              setTimeout(setUpListener, 500);
+            }
+          };
+
+          setUpListener();
+
         });
       });
     </script>

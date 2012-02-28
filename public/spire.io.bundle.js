@@ -341,153 +341,2032 @@ exports.extname = function(path) {
 });
 
 require.define("/spire.io.js", function (require, module, exports, __dirname, __filename) {
-    // spire.io.js is a library designed to help you get your client-side web applications up and running with the high level services provided by the spire.io API. This plugin also exposes a methodology for directly interfacing with the spire.io REST interface.
+    /**
+ * @overview <p>Spire API Client</p>
+ *
+ * <p>spire.io.js is a library designed to help you get your client-side web
+ * applications up and running with the high level services provided by the
+ * spire.io API. This plugin also exposes a methodology for directly interfacing
+ * with the spire.io REST interface.</p>
+ *
+ * <p>You can learn more about spire.io and it's services at http://spire.io, or
+ * find help with the following things:</p>
+ *
+ * <ul>
+ *   <li>source code: http://github.com/spire-io/spire.io.js</li>
+ *   <li>issues: http://github.com/spire-io/spire.io.js/issues</li>
+ *   <li>contact: http://spire.io/contact.htms</li>
+ * </ul>
+ */
 
-// You can learn more about spire.io and it's services at http://spire.io, or find help with the following things:
+var async = require('async')
+  , API = require('./spire/api')
+  ;
 
-// * [source code](http://github.com/spire-io/spire.io.js)
-// * [issues](http://github.com/spire-io/spire.io.js/issues)
-// * [contact spire.io](http://spire.io/contact.html)
-
-var Shred = require('shred');
-var Requests = require('./spire/requests');
-var Messages = require('./spire/messages');
-var Headers = require('./spire/headers');
-var Accounts = require('./spire/accounts');
-
-// # Spire
-var Spire = function (opts) {
-  opts = opts || {};
-  // Set up the spire object with default `options` for `url`, `version`,
-  // and `timeout` as well as stub out some objects to make method definitions
-  // obvious.
-  //
-  // * **spire.options.url**: The url of the spire.io API, defaults to
-  // [http://api.spire.io](http://api.spire.io).
-  this.options = {
-    url: opts.url || 'https://api.spire.io',
-    // * **spire.options.version**: The spire.io API version to use when making requests for resources, defaults to 1.0.
-    version: opts.version || '1.0',
-    // * **spire.options.timeout**: The timeout for long-polling in seconds, defaults to 30 seconds
-    timeout: opts.timeout || 1000 * 30,
-    // * **spire.options.key**: The account key.
-    key: opts.key || null
-  };
-
-  this.isConnecting = false;
-
-  this.shred = new Shred();
-  this.requests = new Requests(this);
-  this.messages = new Messages(this);
-  this.headers = new Headers(this);
-  this.accounts = new Accounts(this);
-};
+/**
+ * Spire API Client
+ *
+ * @class <strong>Spire API Client</strong>
+ *
+ * @example
+ * var spire = new Spire();
+ *
+ * @constructor
+ * @param {object} opts Options for Spire
+ * @param {string} opts.url Spire url do use (defaults to 'https://api.spire.io')
+ * @param {string} opts.version Version of Spire api to use (defaults to '1.0')
+ * @param {number} opts.timeout Timeout for requests (defaults to 30 seconds)
+ */
+function Spire(opts) {
+  this.api = new API(this, opts);
+  this.session = null;
+}
 
 module.exports = Spire;
 
-// # spire.connect
-//
-// provides a single point of connection that builds up the needed objects
-// for discovery and sharing a session between requests.
-// the callback is triggered with an error and a session
-Spire.prototype.connect = function (callback) {
+/**
+ * Get the account key.
+ *
+ * @returns {string} Account key
+ */
+Spire.prototype.key = function () {
+  if (this.session && this.session.resources && this.session.resources.account) {
+    return this.session.resources.account.key();
+  }
+  return null;
+};
+
+/**
+ * Start the Spire session with the given account key.
+ *
+ * @example
+ * var spire = new Spire();
+ * spire.start(your_api_key, function (err, session) {
+ *   if (!err) {
+ *     // You now have a spire session.
+ *     // Start creating channels and subscripions.
+ *   }
+ * });
+ *
+ * @param {string} key The acccount key
+ * @param {function(err)} cb Callback
+ */
+Spire.prototype.start = function (key, cb) {
   var spire = this;
-  spire.isConnecting = true;
-
-  spire.requests.description.get(function(err, description){
-    if (err) return callback(err);
-
-    var options = { key: spire.options.key };
-
-    var sessionBack = function(err, session){
-      if (err) return callback(err);
-
-      spire.isConnecting = false;
-      // save it for later.
-      spire.session = session;
-
-      // publish any messages in the queue
-      if (spire.messages.queue.length > 0){
-        var args;
-        while (args = spire.messages.queue.pop()) {
-          // try it again, its possible this loop might get fired in
-          // parallel effecting the queue so make sure that the args are
-          // defined before calling the publish function
-          if (args) spire.messages.publish(args.message, args.callback);
-        }
-      }
-
-      return callback(null, session);
-    };
-
-    if (spire.session) {
-      sessionBack(null, spire.session);
-    } else {
-      spire.requests.sessions.create(options, sessionBack);
-    }
+  this.api.createSession(key, function (err, session) {
+    if (err) return cb(err);
+    spire.session = session;
+    cb(null);
   });
 };
 
-});
-
-require.define("/node_modules/shred/package.json", function (require, module, exports, __dirname, __filename) {
-    module.exports = {"main":"./lib/shred.js"}
-});
-
-require.define("/node_modules/shred/lib/shred.js", function (require, module, exports, __dirname, __filename) {
-    // Shred is an HTTP client library intended to simplify the use of Node's
-// built-in HTTP library. In particular, we wanted to make it easier to interact
-// with HTTP-based APIs.
-// 
-// See the [examples](./examples.html) for more details.
-
-var _ = require("underscore")
-// Ax is a nice logging library we wrote. You can use any logger, providing it
-// has `info`, `warn`, `debug`, and `error` methods that take a string.
-  , Ax = require("ax")
-  , CookieJarLib = require( "cookiejar" )
-  , CookieAccessInfo = CookieJarLib.CookieAccessInfo
-  , CookieJar = CookieJarLib.CookieJar
-  , Cookie = CookieJarLib.Cookie
-;
-
-// Shred takes some options, including a logger and request defaults.
-
-var Shred = function(options) {
-  options = (options||{});
-  this.defaults = options.defaults||{};
-  this.log = options.logger||(new Ax({ level: "info" }));
-  this._sharedCookieJar = new CookieJar();
+/**
+ * Start the Spire session with the given username and password.
+ *
+ * @example
+ * var spire = new Spire();
+ * spire.login(your_email, your_password, function (err) {
+ *   if (!err) {
+ *     // You now have a spire session.
+ *     // Start creating channels and subscripions.
+ *   }
+ * });
+ *
+ * @param {string} email Email
+ * @param {string} password Password
+ * @param {function(err)} cb Callback
+ */
+Spire.prototype.login = function (email, password, cb) {
+  var spire = this;
+  this.api.login(email, password, function (err, session) {
+    if (err) return cb(err);
+    spire.session = session;
+    cb(null);
+  });
 };
 
-// Most of the real work is done in the request and reponse classes.
- 
-Shred.Request = require("./shred/request");
-Shred.Response = require("./shred/response");
+/**
+ * Registers for a new spire account, and authenticates as the newly created account
+ *
+ * @example
+ * var spire = new Spire();
+ * spire.register({
+ *   email: your_email,
+ *   password: your_password,
+ *   password_confirmation: your_password_confirmation
+ * }, function (err) {
+ *   if (!err) {
+ *     // Your account has been registered,
+ *     // and you now have a spire session.
+ *     // Start creating channels and subscripions.
+ *   }
+ * });
+ *
+ * @param {object} user User info
+ * @param {string} user.email Email
+ * @param {string} user.password Password
+ * @param {string} [user.password_confirmation] Optional password confirmation
+ * @param {function (err)} cb Callback
+ */
+Spire.prototype.register = function (user, cb) {
+  var spire = this;
+  this.api.createAccount(user, function (err, session) {
+    if (err) return cb(err);
+    spire.session = session;
+    cb(null);
+  });
+};
 
-// The `request` method kicks off a new request, instantiating a new `Request`
-// object and passing along whatever default options we were given.
-
-Shred.prototype = {
-  request: function(options) {
-    options.logger = this.log;
-    options.cookieJar = ( 'cookieJar' in options ) ? options.cookieJar : this._sharedCookieJar; // let them set cookieJar = null
-    return new Shred.Request(_.defaults(options,this.defaults));
+/**
+ * Updates your account info.
+ *
+ * @example
+ * var spire = new Spire();
+ * spire.update({
+ *   email: your_new_email
+ * }, function (err, account) {
+ *   if (!err) {
+ *     // Your account has been updated.
+ *   }
+ * });
+ *
+ * @param {object} user User info
+ * @param {string} user.email Email
+ * @param {string} user.password Password
+ * @param {string} [user.password_confirmation] Optional password confirmation
+ * @param {function (err)} cb Callback
+ */
+Spire.prototype.update = function (user, cb) {
+  if (!this.session) {
+    return cb(new Error("You must log in to spire to do this."));
   }
+
+  this.session.resources.account.update(user, cb);
 };
 
-// Define a bunch of convenience methods so that you don't have to include
-// a `method` property in your request options.
+/**
+ * Requests a password reset for email.
+ *
+ * @example
+ * var spire = new Spire();
+ * spire.passwordResetRequest(your_email, function (err) {
+ *   if (!err) {
+ *     // A password reset email has been sent.
+ *   }
+ * });
+ *
+ * @param {string} email Email
+ * @param {function (err)} cb Callback
+ */
+Spire.prototype.passwordResetRequest = function (email, cb) {
+  this.api.passwordResetRequest(email, cb);
+};
 
-"get put post delete".split(" ").forEach(function(method) {
-  Shred.prototype[method] = function(options) {
-    options.method = method;
-    return this.request(options);
+/**
+ * Gets a channel (creates if necessary).
+ *
+ * @example
+ * var spire = new Spire();
+ * spire.start(your_api_key, function (err, session) {
+ *   spire.channel('foo', function (err, channel) {
+ *     if (!err) {
+ *       // `channel` is the channel named "foo".
+ *     }
+ *   });
+ * });
+ *
+ * @param {string} name Channel name to get or create
+ * @param {function(err, channel)} cb Callback
+ */
+Spire.prototype.channel = function (name, cb) {
+  if (!this.session) {
+    return cb(new Error("You must start spire before you can do this."));
+  }
+
+  if (this.session._channels[name]) {
+    return cb(null, this.session._channels[name]);
+  }
+  this._findOrCreateChannel(name, cb);
+};
+
+/**
+ * Gets a list of all channels.  Will return cached data if it is available,
+ * otherwise will make a request.
+ *
+ * @example
+ * var spire = new Spire();
+ * spire.start(your_api_key, function (err, session) {
+ *   spire.channels(function (err, channels) {
+ *     if (!err) {
+ *       // `channels` is a hash of all the account's channels
+ *     }
+ *   });
+ * });
+ *
+ * @param {function (err, channels)} cb Callback
+ */
+Spire.prototype.channels = function (cb) {
+  if (!this.session) {
+    return cb(new Error("You must start spire before you can do this."));
+  }
+
+  this.spire.session.channels(cb);
+};
+
+/**
+ * Gets a list of all channels.  Ignores any cached data, and forces the
+ * request.
+ *
+ * @example
+ * var spire = new Spire();
+ * spire.start(your_api_key, function (err, session) {
+ *   spire.channels$(function (err, channels) {
+ *     if (!err) {
+ *       // `channels` is a hash of all the account's channels
+ *     }
+ *   });
+ * });
+ *
+ * @param {function (err, channels)} cb Callback
+ */
+Spire.prototype.channels$ = function (cb) {
+  if (!this.session) {
+    return cb(new Error("You must start spire before you can do this."));
+  }
+
+  this.spire.session.channels$(cb);
+};
+
+/**
+ * Gets a subscription to the given channels.  Creates the channels and the
+ * subscription if necessary.
+ *
+ * @example
+ * var spire = new Spire();
+ * spire.start(your_api_key, function (err, session) {
+ *   spire.subscription('mySubscription', ['foo', 'bar'], function (err, subscription) {
+ *     if (!err) {
+ *       // `subscription` is a subscription named 'mySubscription', listening on channels named 'foo' and 'bar'.
+ *     }
+ *   });
+ * });
+ *
+ * @param {string} Subscription name
+ * @param {array or string} channelOrChannels Either a single channel name, or an array of
+ *   channel names to subscribe to
+ * @param {function (err, subscription)} cb Callback
+ */
+Spire.prototype.subscription = function (name, channelOrChannels, cb) {
+  var channelNames = (typeof channelOrChannels === 'string') ?
+    [channelOrChannels] : channelOrChannels;
+
+  var spire = this;
+  async.forEach(
+    channelNames,
+    function (channelName, innerCB) {
+      spire._findOrCreateChannel(channelName, innerCB);
+    },
+    function (err) {
+      if (err) return cb(err);
+      spire._findOrCreateSubscription(name, channelNames, cb);
+    }
+  );
+};
+
+/**
+ * Get the subscriptions for an account.  Will return cached data if it is
+ * available, otherwise makes a request.
+ *
+ * @example
+ * var spire = new Spire();
+ * spire.start(your_api_key, function (err, session) {
+ *   spire.subscriptions(function (err, subscriptions) {
+ *     if (!err) {
+ *       // `subscriptions` is a hash of all the account's subscriptions
+ *     }
+ *   });
+ * });
+ *
+ * @param {function (err, subscriptions)} cb Callback
+ */
+Spire.prototype.subscriptions = function (cb) {
+  if (!this.session) {
+    return cb(new Error("You must start spire before you can do this."));
+  }
+
+  this.session.subscriptions(cb);
+};
+
+/**
+ * Get the subscriptions for an account.  Ignores any cached data and always
+ * makes a request.
+ *
+ * @example
+ * var spire = new Spire();
+ * spire.start(your_api_key, function (err, session) {
+ *   spire.subscriptions$(function (err, subscriptions) {
+ *     if (!err) {
+ *       // `subscriptions` is a hash of all the account's subscriptions
+ *     }
+ *   });
+ * });
+ *
+ * @param {function (err, subscriptions)} cb Callback
+ */
+Spire.prototype.subscriptions$ = function (cb) {
+  if (!this.session) {
+    return cb(new Error("You must start spire before you can do this."));
+  }
+
+  this.session.subscriptions$(cb);
+};
+
+/**
+ * Creates an new subscription to a channel or channels, and adds a listener.
+ *
+ * @example
+ * var spire = new Spire();
+ * spire.start(your_api_key, function (err, session) {
+ *   spire.subscribe('myChannel', options, function (messages) {
+ *     // `messages` is array of messages sent to the channel
+ *   }, function (err) {
+ *   // `err` will be non-null if there was a problem creating the subscription.
+ * });
+ *
+ * @param {array or string} channelOrChannels Either a single channel name, or an array of
+ *   channel names to subscribe to
+ * @param {object} [options] Options to pass to the listener
+ * @param {function (messages)} listener Listener that will get called with each batch of messages
+ * @param {function (err, subscription)} [cb] Callback
+ */
+Spire.prototype.subscribe = function (channelOrChannels, options, listener, cb) {
+  if (typeof options === 'function') {
+    cb = listener;
+    listener = options;
+  }
+
+  cb = cb || function () {};
+
+  var name = 'anon-' + Date.now() + '-' + Math.random();
+
+  this.subscription(name, channelOrChannels, function (err, subscription) {
+    if (err) return cb(err);
+    subscription.addListener('messages', listener);
+    subscription.startListening(options);
+    return cb(null, subscription);
+  });
+};
+
+/**
+ * Publish to a channel.
+ *
+ * Creates the channel if necessary.
+ *
+ * @example
+ * var spire = new Spire();
+ * spire.publish('my_channel', 'my message', function (err, message) {
+ *   if (!err) {
+ *     //  Message sent successfully
+ *   }
+ * });
+ *
+ * @param {string} channelName Channel name
+ * @param {object, string} message Message
+ * @param {function (err, subscription)} cb Callback
+ */
+Spire.prototype.publish = function (channelName, message, cb) {
+  var spire = this;
+  spire.channel(channelName, function (err, channel) {
+    if (err) { return cb(err); }
+    channel.publish(message, cb);
+  });
+};
+
+/**
+ * Get Account from url and capability.
+ *
+ * Use this method to get the account without starting a spire session.
+ *
+ * If you have a spire session, you should use <code>spire.session.account</code>.
+ *
+ * @example
+ * var spire = new Spire();
+ * spire.accountFromUrlAndCapability({
+ *   url: account_url,
+ *   capability: account_capability
+ * }, function (err, account) {
+ *   if (!err) {
+ *     // ...
+ *   }
+ * })
+ *
+ * @param {object} creds Url and Capability
+ * @param {string} creds.url Url
+ * @param {string} creds.capability Capability
+ * @param {function (err, account)} cb Callback
+ */
+Spire.prototype.accountFromUrlAndCapability = function (creds, cb) {
+  this.api.accountFromUrlAndCapability(creds, cb);
+};
+
+/**
+ * Get Channel from url and capability.
+ *
+ * Use this method to get a channel without starting a spire session.
+ *
+ * If you have a spire session, you should use <code>spire.channel</code>.
+ *
+ * @example
+ * var spire = new Spire();
+ * spire.channelFromUrlAndCapability({
+ *   url: channel_url,
+ *   capability: channel_capability
+ * }, function (err, channel) {
+ *   if (!err) {
+ *     // ...
+ *   }
+ * })
+ *
+ * @param {object} creds Url and Capability
+ * @param {string} creds.url Url
+ * @param {string} creds.capability Capability
+ * @param {function (err, channel)} cb Callback
+ */
+Spire.prototype.channelFromUrlAndCapability = function (creds, cb) {
+  this.api.channelFromUrlAndCapability(creds, cb);
+};
+
+/**
+ * Get Subscription from url and capability.
+ * Use this method to get a subscription without starting a spire session.
+ *
+ * If you have a spire session, you should use <code>spire.subscription</code>.
+ *
+ * @example
+ * var spire = new Spire();
+ * spire.subscriptionFromUrlAndCapability({
+ *   url: subscription_url,
+ *   capability: subscription_capability
+ * }, function (err, subscription) {
+ *   if (!err) {
+ *     // ...
+ *   }
+ * })
+ *
+ * @param {object} creds Url and Capability
+ * @param {string} creds.url Url
+ * @param {string} creds.capability Capability
+ * @param {function (err, subscription)} cb Callback
+ */
+Spire.prototype.subscriptionFromUrlAndCapability = function (creds, cb) {
+  this.api.subscriptionFromUrlAndCapability(creds, cb);
+};
+
+/**
+ * Start the Spire session with the url and capability for the session.
+ *
+ * @example
+ * var spire = new Spire();
+ * var creds = {
+ *   url: session_url,
+ *   capability: session_capability
+ * };
+ * spire._startSessionFromUrlAndCapability(creds, function (err) {
+ *   if (!err) {
+ *     // You now have a spire session.
+ *     // Start creating channels and subscripions.
+ *   }
+ * });
+ *
+ * @param {object} creds Url and Capability
+ * @param {string} creds.url Url
+ * @param {string} creds.capability Capability
+ * @param {function (err)} cb Callback
+ */
+Spire.prototype._startSessionFromUrlAndCapability = function (creds, cb) {
+  var spire = this;
+  this.api.sessionFromUrlAndCapability(creds, function (err, session) {
+    if (err) return cb(err);
+    spire.session = session;
+    cb(null);
+  });
+};
+
+/**
+ * Number of times to retry creating a channel or subscription before giving up.
+ */
+Spire.prototype.CREATION_RETRY_LIMIT = 5;
+
+/**
+ * Returns the channel with name 'name', creating it if necessary.
+ * You should use `Spire.prototype.channel` method instead of this one.  This
+ * method ignores cached channels.
+ *
+ * @param {string} name Channel name
+ * @param {function (err, channel)} cb Callback
+ */
+Spire.prototype._findOrCreateChannel = function (name, cb) {
+  if (!this.session) {
+    return cb(new Error("You must start spire before you can do that."));
+  }
+
+  var spire = this;
+  var creationCount = 0;
+
+  function createChannel() {
+    creationCount++;
+    spire.session.createChannel(name, function (err, channel) {
+      if (!err) return cb(null, channel);
+      if (err.status !== 409) return cb(err);
+      if (creationCount >= spire.CREATION_RETRY_LIMIT) {
+        return cb(new Error("Could not create channel: " + name));
+      }
+      getChannel();
+    });
+  }
+
+  function getChannel() {
+    spire.session.channels$(function (err, channels) {
+      if (err) return cb(err);
+      if (channels[name]) return cb(null, channels[name]);
+      createChannel();
+    });
+  }
+
+  getChannel();
+};
+
+/**
+ * Returns the subvscription with name 'name', creating it if necessary.
+ * You should use `Spire.prototype.subscribe` method instead of this one.  This
+ * method ignores cached subscriptions, and does not create the channels.
+ *
+ * @param {string} name Subscription name
+ * @param {string} channelNames Channel names
+ * @param {function (err, subscription)} cb Callback
+ */
+Spire.prototype._findOrCreateSubscription = function (name, channelNames, cb) {
+  if (!this.session) {
+    return cb(new Error("You must start spire before you can do that."));
+  }
+
+  var spire = this;
+  var creationCount = 0;
+
+  function createSubscription() {
+    creationCount++;
+    spire.session.createSubscription(name, channelNames, function (err, sub) {
+      if (!err) return cb(null, sub);
+      if (err.status !== 409) return cb(err);
+      if (creationCount >= spire.CREATION_RETRY_LIMIT) {
+        return cb(new Error("Could not create subscription: " + name));
+      }
+      getSubscription();
+    });
+  }
+
+  function getSubscription() {
+    spire.session.subscriptions$(function (err, subscriptions) {
+      if (err) return cb(err);
+      if (subscriptions[name]) return cb(null, subscriptions[name]);
+      createSubscription();
+    });
+  }
+
+  getSubscription();
+};
+
+});
+
+require.define("/node_modules/async/package.json", function (require, module, exports, __dirname, __filename) {
+    module.exports = {"main":"./index"}
+});
+
+require.define("/node_modules/async/index.js", function (require, module, exports, __dirname, __filename) {
+    // This file is just added for convenience so this repository can be
+// directly checked out into a project's deps folder
+module.exports = require('./lib/async');
+
+});
+
+require.define("/node_modules/async/lib/async.js", function (require, module, exports, __dirname, __filename) {
+    /*global setTimeout: false, console: false */
+(function () {
+
+    var async = {};
+
+    // global on the server, window in the browser
+    var root = this,
+        previous_async = root.async;
+
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = async;
+    }
+    else {
+        root.async = async;
+    }
+
+    async.noConflict = function () {
+        root.async = previous_async;
+        return async;
+    };
+
+    //// cross-browser compatiblity functions ////
+
+    var _forEach = function (arr, iterator) {
+        if (arr.forEach) {
+            return arr.forEach(iterator);
+        }
+        for (var i = 0; i < arr.length; i += 1) {
+            iterator(arr[i], i, arr);
+        }
+    };
+
+    var _map = function (arr, iterator) {
+        if (arr.map) {
+            return arr.map(iterator);
+        }
+        var results = [];
+        _forEach(arr, function (x, i, a) {
+            results.push(iterator(x, i, a));
+        });
+        return results;
+    };
+
+    var _reduce = function (arr, iterator, memo) {
+        if (arr.reduce) {
+            return arr.reduce(iterator, memo);
+        }
+        _forEach(arr, function (x, i, a) {
+            memo = iterator(memo, x, i, a);
+        });
+        return memo;
+    };
+
+    var _keys = function (obj) {
+        if (Object.keys) {
+            return Object.keys(obj);
+        }
+        var keys = [];
+        for (var k in obj) {
+            if (obj.hasOwnProperty(k)) {
+                keys.push(k);
+            }
+        }
+        return keys;
+    };
+
+    var _indexOf = function (arr, item) {
+        if (arr.indexOf) {
+            return arr.indexOf(item);
+        }
+        for (var i = 0; i < arr.length; i += 1) {
+            if (arr[i] === item) {
+                return i;
+            }
+        }
+        return -1;
+    };
+
+    //// exported async module functions ////
+
+    //// nextTick implementation with browser-compatible fallback ////
+    if (typeof process === 'undefined' || !(process.nextTick)) {
+        async.nextTick = function (fn) {
+            setTimeout(fn, 0);
+        };
+    }
+    else {
+        async.nextTick = process.nextTick;
+    }
+
+    async.forEach = function (arr, iterator, callback) {
+        if (!arr.length) {
+            return callback();
+        }
+        var completed = 0;
+        _forEach(arr, function (x) {
+            iterator(x, function (err) {
+                if (err) {
+                    callback(err);
+                    callback = function () {};
+                }
+                else {
+                    completed += 1;
+                    if (completed === arr.length) {
+                        callback();
+                    }
+                }
+            });
+        });
+    };
+
+    async.forEachSeries = function (arr, iterator, callback) {
+        if (!arr.length) {
+            return callback();
+        }
+        var completed = 0;
+        var iterate = function () {
+            iterator(arr[completed], function (err) {
+                if (err) {
+                    callback(err);
+                    callback = function () {};
+                }
+                else {
+                    completed += 1;
+                    if (completed === arr.length) {
+                        callback();
+                    }
+                    else {
+                        iterate();
+                    }
+                }
+            });
+        };
+        iterate();
+    };
+    
+    async.forEachLimit = function (arr, limit, iterator, callback) {
+        if (!arr.length || limit <= 0) {
+            return callback(); 
+        }
+        var completed = 0;
+        var started = 0;
+        var running = 0;
+        
+        (function replenish () {
+          if (completed === arr.length) {
+              return callback();
+          }
+          
+          while (running < limit && started < arr.length) {
+            iterator(arr[started], function (err) {
+              if (err) {
+                  callback(err);
+                  callback = function () {};
+              }
+              else {
+                  completed += 1;
+                  running -= 1;
+                  if (completed === arr.length) {
+                      callback();
+                  }
+                  else {
+                      replenish();
+                  }
+              }
+            });
+            started += 1;
+            running += 1;
+          }
+        })();
+    };
+
+
+    var doParallel = function (fn) {
+        return function () {
+            var args = Array.prototype.slice.call(arguments);
+            return fn.apply(null, [async.forEach].concat(args));
+        };
+    };
+    var doSeries = function (fn) {
+        return function () {
+            var args = Array.prototype.slice.call(arguments);
+            return fn.apply(null, [async.forEachSeries].concat(args));
+        };
+    };
+
+
+    var _asyncMap = function (eachfn, arr, iterator, callback) {
+        var results = [];
+        arr = _map(arr, function (x, i) {
+            return {index: i, value: x};
+        });
+        eachfn(arr, function (x, callback) {
+            iterator(x.value, function (err, v) {
+                results[x.index] = v;
+                callback(err);
+            });
+        }, function (err) {
+            callback(err, results);
+        });
+    };
+    async.map = doParallel(_asyncMap);
+    async.mapSeries = doSeries(_asyncMap);
+
+
+    // reduce only has a series version, as doing reduce in parallel won't
+    // work in many situations.
+    async.reduce = function (arr, memo, iterator, callback) {
+        async.forEachSeries(arr, function (x, callback) {
+            iterator(memo, x, function (err, v) {
+                memo = v;
+                callback(err);
+            });
+        }, function (err) {
+            callback(err, memo);
+        });
+    };
+    // inject alias
+    async.inject = async.reduce;
+    // foldl alias
+    async.foldl = async.reduce;
+
+    async.reduceRight = function (arr, memo, iterator, callback) {
+        var reversed = _map(arr, function (x) {
+            return x;
+        }).reverse();
+        async.reduce(reversed, memo, iterator, callback);
+    };
+    // foldr alias
+    async.foldr = async.reduceRight;
+
+    var _filter = function (eachfn, arr, iterator, callback) {
+        var results = [];
+        arr = _map(arr, function (x, i) {
+            return {index: i, value: x};
+        });
+        eachfn(arr, function (x, callback) {
+            iterator(x.value, function (v) {
+                if (v) {
+                    results.push(x);
+                }
+                callback();
+            });
+        }, function (err) {
+            callback(_map(results.sort(function (a, b) {
+                return a.index - b.index;
+            }), function (x) {
+                return x.value;
+            }));
+        });
+    };
+    async.filter = doParallel(_filter);
+    async.filterSeries = doSeries(_filter);
+    // select alias
+    async.select = async.filter;
+    async.selectSeries = async.filterSeries;
+
+    var _reject = function (eachfn, arr, iterator, callback) {
+        var results = [];
+        arr = _map(arr, function (x, i) {
+            return {index: i, value: x};
+        });
+        eachfn(arr, function (x, callback) {
+            iterator(x.value, function (v) {
+                if (!v) {
+                    results.push(x);
+                }
+                callback();
+            });
+        }, function (err) {
+            callback(_map(results.sort(function (a, b) {
+                return a.index - b.index;
+            }), function (x) {
+                return x.value;
+            }));
+        });
+    };
+    async.reject = doParallel(_reject);
+    async.rejectSeries = doSeries(_reject);
+
+    var _detect = function (eachfn, arr, iterator, main_callback) {
+        eachfn(arr, function (x, callback) {
+            iterator(x, function (result) {
+                if (result) {
+                    main_callback(x);
+                    main_callback = function () {};
+                }
+                else {
+                    callback();
+                }
+            });
+        }, function (err) {
+            main_callback();
+        });
+    };
+    async.detect = doParallel(_detect);
+    async.detectSeries = doSeries(_detect);
+
+    async.some = function (arr, iterator, main_callback) {
+        async.forEach(arr, function (x, callback) {
+            iterator(x, function (v) {
+                if (v) {
+                    main_callback(true);
+                    main_callback = function () {};
+                }
+                callback();
+            });
+        }, function (err) {
+            main_callback(false);
+        });
+    };
+    // any alias
+    async.any = async.some;
+
+    async.every = function (arr, iterator, main_callback) {
+        async.forEach(arr, function (x, callback) {
+            iterator(x, function (v) {
+                if (!v) {
+                    main_callback(false);
+                    main_callback = function () {};
+                }
+                callback();
+            });
+        }, function (err) {
+            main_callback(true);
+        });
+    };
+    // all alias
+    async.all = async.every;
+
+    async.sortBy = function (arr, iterator, callback) {
+        async.map(arr, function (x, callback) {
+            iterator(x, function (err, criteria) {
+                if (err) {
+                    callback(err);
+                }
+                else {
+                    callback(null, {value: x, criteria: criteria});
+                }
+            });
+        }, function (err, results) {
+            if (err) {
+                return callback(err);
+            }
+            else {
+                var fn = function (left, right) {
+                    var a = left.criteria, b = right.criteria;
+                    return a < b ? -1 : a > b ? 1 : 0;
+                };
+                callback(null, _map(results.sort(fn), function (x) {
+                    return x.value;
+                }));
+            }
+        });
+    };
+
+    async.auto = function (tasks, callback) {
+        callback = callback || function () {};
+        var keys = _keys(tasks);
+        if (!keys.length) {
+            return callback(null);
+        }
+
+        var results = {};
+
+        var listeners = [];
+        var addListener = function (fn) {
+            listeners.unshift(fn);
+        };
+        var removeListener = function (fn) {
+            for (var i = 0; i < listeners.length; i += 1) {
+                if (listeners[i] === fn) {
+                    listeners.splice(i, 1);
+                    return;
+                }
+            }
+        };
+        var taskComplete = function () {
+            _forEach(listeners, function (fn) {
+                fn();
+            });
+        };
+
+        addListener(function () {
+            if (_keys(results).length === keys.length) {
+                callback(null, results);
+            }
+        });
+
+        _forEach(keys, function (k) {
+            var task = (tasks[k] instanceof Function) ? [tasks[k]]: tasks[k];
+            var taskCallback = function (err) {
+                if (err) {
+                    callback(err);
+                    // stop subsequent errors hitting callback multiple times
+                    callback = function () {};
+                }
+                else {
+                    var args = Array.prototype.slice.call(arguments, 1);
+                    if (args.length <= 1) {
+                        args = args[0];
+                    }
+                    results[k] = args;
+                    taskComplete();
+                }
+            };
+            var requires = task.slice(0, Math.abs(task.length - 1)) || [];
+            var ready = function () {
+                return _reduce(requires, function (a, x) {
+                    return (a && results.hasOwnProperty(x));
+                }, true);
+            };
+            if (ready()) {
+                task[task.length - 1](taskCallback, results);
+            }
+            else {
+                var listener = function () {
+                    if (ready()) {
+                        removeListener(listener);
+                        task[task.length - 1](taskCallback, results);
+                    }
+                };
+                addListener(listener);
+            }
+        });
+    };
+
+    async.waterfall = function (tasks, callback) {
+        if (!tasks.length) {
+            return callback();
+        }
+        callback = callback || function () {};
+        var wrapIterator = function (iterator) {
+            return function (err) {
+                if (err) {
+                    callback(err);
+                    callback = function () {};
+                }
+                else {
+                    var args = Array.prototype.slice.call(arguments, 1);
+                    var next = iterator.next();
+                    if (next) {
+                        args.push(wrapIterator(next));
+                    }
+                    else {
+                        args.push(callback);
+                    }
+                    async.nextTick(function () {
+                        iterator.apply(null, args);
+                    });
+                }
+            };
+        };
+        wrapIterator(async.iterator(tasks))();
+    };
+
+    async.parallel = function (tasks, callback) {
+        callback = callback || function () {};
+        if (tasks.constructor === Array) {
+            async.map(tasks, function (fn, callback) {
+                if (fn) {
+                    fn(function (err) {
+                        var args = Array.prototype.slice.call(arguments, 1);
+                        if (args.length <= 1) {
+                            args = args[0];
+                        }
+                        callback.call(null, err, args);
+                    });
+                }
+            }, callback);
+        }
+        else {
+            var results = {};
+            async.forEach(_keys(tasks), function (k, callback) {
+                tasks[k](function (err) {
+                    var args = Array.prototype.slice.call(arguments, 1);
+                    if (args.length <= 1) {
+                        args = args[0];
+                    }
+                    results[k] = args;
+                    callback(err);
+                });
+            }, function (err) {
+                callback(err, results);
+            });
+        }
+    };
+
+    async.series = function (tasks, callback) {
+        callback = callback || function () {};
+        if (tasks.constructor === Array) {
+            async.mapSeries(tasks, function (fn, callback) {
+                if (fn) {
+                    fn(function (err) {
+                        var args = Array.prototype.slice.call(arguments, 1);
+                        if (args.length <= 1) {
+                            args = args[0];
+                        }
+                        callback.call(null, err, args);
+                    });
+                }
+            }, callback);
+        }
+        else {
+            var results = {};
+            async.forEachSeries(_keys(tasks), function (k, callback) {
+                tasks[k](function (err) {
+                    var args = Array.prototype.slice.call(arguments, 1);
+                    if (args.length <= 1) {
+                        args = args[0];
+                    }
+                    results[k] = args;
+                    callback(err);
+                });
+            }, function (err) {
+                callback(err, results);
+            });
+        }
+    };
+
+    async.iterator = function (tasks) {
+        var makeCallback = function (index) {
+            var fn = function () {
+                if (tasks.length) {
+                    tasks[index].apply(null, arguments);
+                }
+                return fn.next();
+            };
+            fn.next = function () {
+                return (index < tasks.length - 1) ? makeCallback(index + 1): null;
+            };
+            return fn;
+        };
+        return makeCallback(0);
+    };
+
+    async.apply = function (fn) {
+        var args = Array.prototype.slice.call(arguments, 1);
+        return function () {
+            return fn.apply(
+                null, args.concat(Array.prototype.slice.call(arguments))
+            );
+        };
+    };
+
+    var _concat = function (eachfn, arr, fn, callback) {
+        var r = [];
+        eachfn(arr, function (x, cb) {
+            fn(x, function (err, y) {
+                r = r.concat(y || []);
+                cb(err);
+            });
+        }, function (err) {
+            callback(err, r);
+        });
+    };
+    async.concat = doParallel(_concat);
+    async.concatSeries = doSeries(_concat);
+
+    async.whilst = function (test, iterator, callback) {
+        if (test()) {
+            iterator(function (err) {
+                if (err) {
+                    return callback(err);
+                }
+                async.whilst(test, iterator, callback);
+            });
+        }
+        else {
+            callback();
+        }
+    };
+
+    async.until = function (test, iterator, callback) {
+        if (!test()) {
+            iterator(function (err) {
+                if (err) {
+                    return callback(err);
+                }
+                async.until(test, iterator, callback);
+            });
+        }
+        else {
+            callback();
+        }
+    };
+
+    async.queue = function (worker, concurrency) {
+        var workers = 0;
+        var q = {
+            tasks: [],
+            concurrency: concurrency,
+            saturated: null,
+            empty: null,
+            drain: null,
+            push: function (data, callback) {
+                q.tasks.push({data: data, callback: callback});
+                if(q.saturated && q.tasks.length == concurrency) q.saturated();
+                async.nextTick(q.process);
+            },
+            process: function () {
+                if (workers < q.concurrency && q.tasks.length) {
+                    var task = q.tasks.shift();
+                    if(q.empty && q.tasks.length == 0) q.empty();
+                    workers += 1;
+                    worker(task.data, function () {
+                        workers -= 1;
+                        if (task.callback) {
+                            task.callback.apply(task, arguments);
+                        }
+                        if(q.drain && q.tasks.length + workers == 0) q.drain();
+                        q.process();
+                    });
+                }
+            },
+            length: function () {
+                return q.tasks.length;
+            },
+            running: function () {
+                return workers;
+            }
+        };
+        return q;
+    };
+
+    var _console_fn = function (name) {
+        return function (fn) {
+            var args = Array.prototype.slice.call(arguments, 1);
+            fn.apply(null, args.concat([function (err) {
+                var args = Array.prototype.slice.call(arguments, 1);
+                if (typeof console !== 'undefined') {
+                    if (err) {
+                        if (console.error) {
+                            console.error(err);
+                        }
+                    }
+                    else if (console[name]) {
+                        _forEach(args, function (x) {
+                            console[name](x);
+                        });
+                    }
+                }
+            }]));
+        };
+    };
+    async.log = _console_fn('log');
+    async.dir = _console_fn('dir');
+    /*async.info = _console_fn('info');
+    async.warn = _console_fn('warn');
+    async.error = _console_fn('error');*/
+
+    async.memoize = function (fn, hasher) {
+        var memo = {};
+        var queues = {};
+        hasher = hasher || function (x) {
+            return x;
+        };
+        var memoized = function () {
+            var args = Array.prototype.slice.call(arguments);
+            var callback = args.pop();
+            var key = hasher.apply(null, args);
+            if (key in memo) {
+                callback.apply(null, memo[key]);
+            }
+            else if (key in queues) {
+                queues[key].push(callback);
+            }
+            else {
+                queues[key] = [callback];
+                fn.apply(null, args.concat([function () {
+                    memo[key] = arguments;
+                    var q = queues[key];
+                    delete queues[key];
+                    for (var i = 0, l = q.length; i < l; i++) {
+                      q[i].apply(null, arguments);
+                    }
+                }]));
+            }
+        };
+        memoized.unmemoized = fn;
+        return memoized;
+    };
+
+    async.unmemoize = function (fn) {
+      return function () {
+        return (fn.unmemoized || fn).apply(null, arguments);
+      }
+    };
+
+}());
+
+});
+
+require.define("/spire/api.js", function (require, module, exports, __dirname, __filename) {
+    /**
+ * @fileOverview API class definition
+ */
+
+var Resource = require('./api/resource')
+  , Account = require('./api/account')
+  , Billing = require('./api/billing')
+  , Channel = require('./api/channel')
+  , Session = require('./api/session')
+  , Subscription = require('./api/subscription')
+  ;
+
+/**
+ * Abstraction for the Spire API
+ *
+ * @class Collection of API methods
+ *
+ * @example
+ * var api = new API(options);
+ *
+ * @constructor
+ * @param {object} spire Spire object
+ * @param {object} [opts] Options
+ * @param {string} [opts.url] Spire api url
+ * @param {string} [opts.version] Version of the Spire api to use
+ * @param {string} [opts.timeout] Timeout for requests
+ */
+function API(spire, opts) {
+  this.spire = spire;
+
+  opts = opts || {};
+  this.url = opts.url || 'https://api.spire.io';
+  this.version = opts.version || '1.0';
+  this.timeout = opts.timeout || 30 * 1000;
+
+  this.description = null;
+  this.schema = null;
+}
+
+module.exports = API;
+
+
+/**
+ * Make requests to the api.
+ * @function
+ * @see Resourse.prototype.request
+ */
+API.prototype.request = Resource.prototype.request;
+
+/**
+ * Discovers urls from Spire API.  Since this description does not change often,
+ * we only make the request once and cache the result for subsequent calls.
+ *
+ * @example
+ * api.discover(function (err, discovered) {
+ *   if (!err) {
+ *     // ...
+ *   }
+ * });
+ *
+ * @param {function(err, discovered)} cb Callback
+ */
+API.prototype.discover = function (cb) {
+  var api = this;
+
+  if (this.description) {
+    return process.nextTick(function () {
+      cb(null, api.description);
+    });
+  }
+
+  this.request('discover', function (err, description) {
+    if (err) return cb(err);
+    api.description = description;
+    api.schema = description.schema[api.version];
+    cb(null, description);
+  });
+};
+
+/**
+ * Creates a spire session from an account key.
+ *
+ * @param {string} key The acccount key
+ * @param {function(err)} cb Callback
+ */
+API.prototype.createSession = function (key, cb) {
+  var api = this;
+  this.discover(function (err) {
+    if (err) return cb(err);
+    api.request('create_session', key, function (err, sessionData) {
+      if (err) return cb(err);
+      var session = new Session(api.spire, sessionData);
+      cb(null, session);
+    });
+  });
+};
+
+/**
+ * Logs in with the given email and password.
+ *
+ * @param {string} email Email
+ * @param {string} password Password
+ * @param {function(err)} cb Callback
+ */
+API.prototype.login = function (email, password, cb) {
+  var api = this;
+  this.discover(function (err) {
+    if (err) return cb(err);
+    api.request('login', email, password, function (err, sessionData) {
+      if (err) return cb(err);
+      var session = new Session(api.spire, sessionData);
+      cb(null, session);
+    });
+  });
+};
+
+/**
+ * Register for a new spire account, and authenticates as the newly created account
+ *
+ * @param {object} user User info
+ * @param {string} user.email Email
+ * @param {string} user.password Password
+ * @param {string} [user.password_confirmation] Optional password confirmation
+ * @param {function (err)} cb Callback
+ */
+API.prototype.createAccount = function (info, cb) {
+  var api = this;
+  this.discover(function (err) {
+    if (err) return cb(err);
+    api.request('create_account', info, function (err, sessionData) {
+      if (err) return cb(err);
+      var session = new Session(api.spire, sessionData);
+      cb(null, session);
+    });
+  });
+};
+
+/**
+ * Request a password reset for email.
+ *
+ * @param {string} email Email
+ * @param {function (err)} cb Callback
+ */
+API.prototype.passwordResetRequest = function (email, cb) {
+  var api = this;
+  this.discover(function (err) {
+    if (err) return cb(err);
+    api.request('password_reset', email, cb);
+  });
+};
+
+/**
+ * Get billing information for the account.
+ *
+ * @param {function (err, billingResource)} cb Callback
+ */
+API.prototype.billing = function (cb) {
+  var api = this;
+  this.discover(function (err) {
+    if (err) return cb(err);
+    api.request('billing', function (err, billingData) {
+      if (err) return cb(err);
+      var billing = new Billing(api.spire, billingData);
+      cb(null, billing);
+    });
+  });
+};
+
+/**
+ * Get Account from url and capability.
+ *
+ * @param {object} creds Url and Capability
+ * @param {string} creds.url Url
+ * @param {string} creds.capability Capability
+ * @param {function (err, account)} cb Callback
+ */
+API.prototype.accountFromUrlAndCapability = function (creds, cb) {
+  var api = this;
+  this.discover(function (err) {
+    if (err) return cb(err);
+    var account = new Account(api.spire, creds);
+    account.get(cb);
+  });
+};
+
+/**
+ * Update Account from url and capability.
+ *
+ * @param {object} account Must contain at least Url and Capability
+ * @param {string} creds.url Url
+ * @param {string} creds.capability Capability
+ * @param {function (err, account)} cb Callback
+ */
+API.prototype.updateAccountWithUrlAndCapability = function (accountData, cb) {
+  var api = this;
+  this.discover(function (err) {
+    if (err) return cb(err);
+    api.request('update_account', accountData, function (err, acc) {
+      if (err) return cb(err);
+      var account = new Account(api.spire, acc);
+      cb(null, account);
+    });
+  });
+};
+
+/**
+ * Get Channel from url and capability.
+ *
+ * @param {object} creds Url and Capability
+ * @param {string} creds.url Url
+ * @param {string} creds.capability Capability
+ * @param {function (err, channel)} cb Callback
+ */
+API.prototype.channelFromUrlAndCapability = function (creds, cb) {
+  var api = this;
+  this.discover(function (err) {
+    if (err) return cb(err);
+    var channel = new Channel(api.spire, creds);
+    channel.get(cb);
+  });
+};
+
+/**
+ * Get Session from url and capability.
+ *
+ * @param {object} creds Url and Capability
+ * @param {string} creds.url Url
+ * @param {string} creds.capability Capability
+ * @param {function (err, subscription)} cb Callback
+ */
+API.prototype.sessionFromUrlAndCapability = function (creds, cb) {
+  var api = this;
+  this.discover(function (err) {
+    if (err) return cb(err);
+    var session = new Session(api.spire, creds);
+    session.get(cb);
+  });
+};
+
+/**
+ * Get Subscription from url and capability.
+ *
+ * @param {object} creds Url and Capability
+ * @param {string} creds.url Url
+ * @param {string} creds.capability Capability
+ * @param {function (err, subscription)} cb Callback
+ */
+API.prototype.subscriptionFromUrlAndCapability = function (creds, cb) {
+  var api = this;
+  this.discover(function (err) {
+    if (err) return cb(err);
+    var subscription = new Subscription(api.spire, creds);
+    process.nextTick(function () {
+      cb(null, subscription);
+    });
+  });
+};
+
+/**
+ * Returns the MIME type for resourceName.
+ *
+ * @param {string} [name] Name of the resource MIME type to return
+ * @returns {string} MIME type of the resource
+ */
+API.prototype.mediaType = function (resourceName) {
+  if (!this.schema) {
+    throw "No description object.  Run `spire.api.discover` first.";
+  }
+
+  if (!this.schema[resourceName]) {
+    throw "No schema for resource " + resourceName;
+  }
+
+  return this.schema[resourceName].mediaType;
+};
+
+/**
+ * Returns the Authorization header for the resource.
+ *
+ * @param {Resource} resource Resource
+ * @returns {string} Authorization header for the resource
+ */
+API.prototype.authorization = function (resource) {
+  return ['Capability', resource.capability].join(' ');
+};
+
+/**
+ * Requests
+ * These define API calls and have no side effects.  They can be run by calling
+ *     this.request(<request name>);
+ */
+
+/**
+ * Gets the api description resource.
+ * @name discover
+ * @ignore
+ */
+Resource.defineRequest(API.prototype, 'discover', function () {
+  return {
+    method: 'get',
+    url: this.url,
+    headers: {
+      accept: "application/json"
+    }
   };
 });
 
+/**
+ * Posts to sessions url with the accont key.
+ * @name create_session
+ * @ignore
+ */
+Resource.defineRequest(API.prototype, 'create_session', function (key) {
+  return {
+    method: 'post',
+    url: this.description.resources.sessions.url,
+    headers: {
+      'Content-Type': this.mediaType('account'),
+      'Accept': this.mediaType('session')
+    },
+    content: {key: key}
+  };
+});
 
-module.exports = Shred;
+/**
+ * Posts to sessions url with email and password.
+ * @name login
+ * @ignore
+ */
+Resource.defineRequest(API.prototype, 'login', function (email, password) {
+  return {
+    method: 'post',
+    url: this.description.resources.sessions.url,
+    headers: {
+      'Content-Type': this.mediaType('account'),
+      'Accept': this.mediaType('session')
+    },
+    content: {
+      email: email,
+      password: password
+    }
+  };
+});
+
+/**
+ * Posts to accounts url with user info.
+ * @name create_account
+ * @ignore
+ */
+Resource.defineRequest(API.prototype, 'create_account', function (account) {
+  return {
+    method: 'post',
+    url: this.description.resources.accounts.url,
+    headers: {
+      'Content-Type': this.mediaType('account'),
+      'Accept': this.mediaType('session')
+    },
+    content: account
+  };
+});
+
+/**
+ * Posts to accounts url with object containing email.
+ * @name password_reset
+ * @ignore
+ */
+Resource.defineRequest(API.prototype, 'password_reset', function (email) {
+  return {
+    method: 'post',
+    url: this.description.resources.accounts.url,
+    content: "",
+    query: { email: email }
+  };
+});
+
+/**
+ * Gets billing resource.
+ * @name billing
+ * @ignore
+ */
+Resource.defineRequest(API.prototype, 'billing', function () {
+  return {
+    method: 'get',
+    url: this.description.resources.billing.url,
+    content: "",
+    headers: {
+      'Accept': 'application/json'
+    }
+  };
+});
+
+/**
+ * Updates (puts) to the resouce.
+ * @name update
+ * @ignore
+ */
+Resource.defineRequest(API.prototype, 'update_account', function (data) {
+  return {
+    method: 'put',
+    url: data.url,
+    content: data,
+    headers: {
+      'Authorization': "Capability " + data.capability,
+      'Accept': this.mediaType('account'),
+      'Content-Type': this.mediaType('account')
+    }
+  };
+});
+
+});
+
+require.define("/spire/api/resource.js", function (require, module, exports, __dirname, __filename) {
+    /**
+ * @fileOverview Resource class definition
+ */
+
+var _ = require('underscore')
+  , Shred = require('shred')
+  , shred = new Shred()
+  , ResponseError = require('./response_error')
+  , EventEmitter = require('events').EventEmitter
+  ;
+
+/**
+ * Base class for objects repreenting resources in the spire api.  It is meant
+ * to be extended by other classes.
+ *
+ * <p>Resources have methods for making requests to the spire api.  These methods
+ * are defined with `Request.defineRequest`.  Note that this is a method on the
+ * Request object itself, not the prototype.  It is used to create methods on
+ * the prototype of Resource classes.</p>
+ *
+ * <p>The `Resource` class provides default requests for the `get`, `put`,
+ * `delete`, and `post` methods.  These methods can be overwritten by
+ * subclasses.</p>
+ *
+ * <p>Once a request method has been defined, it can be run with
+ * <pre><code>
+ *   resource.request(<request name>);
+ * </code></pre>
+ * </p>
+ *
+ * <p>Such request methods have no side effects, and return JSON objects direct
+ * from the spire api.</p>
+ *
+ * @class Base class for Spire API Resources
+ *
+ * @constructor
+ * @extends EventEmitter
+ * @param {object} spire Spire object
+ * @param {object} data Resource data from the spire api
+ */
+function Resource(spire, data) {
+  this.spire = spire;
+  this.data = data;
+}
+
+Resource.prototype = new EventEmitter();
+
+module.exports = Resource;
+
+/**
+ * Creates a request method on given object.
+ *
+ * `name` is the name of the request.  This is what gets passed to the `request`
+ * method when actually calling the request.
+ *
+ * For instance, a request defined with
+ * <pre><code>
+ *   defineRequest(somePrototype, 'get', createGetReq);
+ * </code></pre>
+ *
+ * is run by calling
+ * <pre><code>
+ *   resource.request('get', callback);
+ * </code></pre>
+ *
+ * `fn` is a function that takes any number of arguments and returns a hash
+ * describing the http request we are about to send.  Any arguments to this
+ * function can be passed to the `request` method.
+ *
+ * For example, suppose `createGetReq` from above is the following function,
+ * which takes an id number as argument as puts it in the query params:
+ *
+ * <pre><code>
+ *   function createGetReq (id) {
+ *     return {
+ *       method: 'get',
+ *       url: this.url(),
+ *       query: { id: id },
+ *      };
+ *   };
+ * </code></pre>
+ *
+ *  You would call that request like this:
+ *  <code>resource.request('get', id, callback);</code>
+ *
+ * @param {object} obj Object to add the request method to.
+ * @param {string} name Name of the request method
+ * @param {function (*args)} fn Function taking any number of arguments, returning an object describing the HTTP request.
+ */
+Resource.defineRequest = function (obj, name, fn) {
+  obj['_req_' + name] = function () {
+    var args = Array.prototype.slice.call(arguments);
+    var callback = args.pop();
+
+    var req = fn.apply(this, args);
+
+    shred.request(req)
+      .on('error', function (res) {
+        var error = new ResponseError(res, req);
+        callback(error);
+      })
+      .on('success', function (res) {
+        callback(null, res.body.data);
+      });
+  };
+};
+
+/**
+ * <p>Makes the request with the given name.
+ *
+ * <p>Arguments are the request name, followed by any number of arguments that will
+ * be passed to the function which creates the request description, and a
+ * callback.
+ */
+Resource.prototype.request = function () {
+  var args = Array.prototype.slice.call(arguments);
+  var reqName = args.shift();
+  var cb = args[args.length - 1];
+  if (typeof this['_req_' + reqName] !== 'function') {
+    return cb(new Error("No request defined for " + reqName));
+  }
+  this['_req_' + reqName].apply(this, args);
+};
+
+/**
+ * <p>Gets the resource.
+ *
+ * <p>Default method that may be overwritten by subclasses.
+ *
+ * @param {function (err, resource)} cd Callback
+ */
+Resource.prototype.get = function (cb) {
+  var resource = this;
+  this.request('get', function (err, data) {
+    if (err) return cb(err);
+    resource.data = data;
+    cb(null, resource);
+  });
+};
+
+/**
+ * <p>Updates (puts to) the resource.
+ *
+ * <p>Default method that may be overwritten by subclasses.
+ *
+ * @param {object} data Resource data
+ * @param {function (err, resource)} cd Callback
+ */
+Resource.prototype.update = function (data, cb) {
+  var resource = this;
+  this.request('update', data, function (err, data) {
+    if (err) return cb(err);
+    resource.data = data;
+    cb(null, resource);
+  });
+};
+
+/**
+ * <p>Delete the resource.
+ *
+ * <p>Default method that may be overwritten by subclasses.
+ *
+ * @param {function (err, resource)} cd Callback
+ */
+Resource.prototype['delete'] = function (data, cb) {
+  var resource = this;
+  this.request('delete', data, function (err, data) {
+    if (err) return cb(err);
+    delete resource.data;
+    cb(null);
+  });
+};
+
+/**
+ * Returns the url for the resource.
+ *
+ * @returns {string} url
+ */
+Resource.prototype.url = function () {
+  return this.data.url;
+};
+
+/**
+ * Returns the capability for the resource.
+ *
+ * @returns {string} Capability
+ */
+Resource.prototype.capability = function () {
+  return this.data.capability;
+};
+
+/**
+ * Returns the Authorization header for this resource, or for another capability
+ * if one is passed in.
+ *
+ * @param {Resource} [resource] Optional resource
+ * @returns {string} Authorization header
+ */
+Resource.prototype.authorization = function (resource) {
+  var cap;
+  if (resource) {
+    if (typeof resource.capability === 'function') {
+      cap = resource.capability();
+    } else {
+      cap = resource.capability;
+    }
+  } else {
+    cap = this.capability();
+  }
+  return "Capability " + cap;
+};
+
+/**
+ * Returns the resource key.
+ *
+ * @returns {string} Key
+ */
+Resource.prototype.key = function () {
+  return this.data.key;
+};
+
+/**
+ * Returns the resource schema for this resource the resource of a given name.
+ *
+ * @param {string} [name] Optional name of the resource schema to return
+ * @returns {string} Schema
+ */
+Resource.prototype.schema = function (name) {
+  name = name || this.resourceName;
+
+  if (!this.spire.api.schema) {
+    throw "No description object.  Run `spire.api.discover` first.";
+  }
+
+  if (!this.spire.api.schema[name]) {
+    throw "No schema for resource " + name;
+  }
+
+  return this.spire.api.schema[name];
+};
+
+/**
+ * Returns the MIME type for this resource or the resource of a given name.
+ *
+ * @param {string} [name] Optional name of the resource MIME type to return
+ * @returns {string} MIME type
+ */
+Resource.prototype.mediaType = function (name) {
+  return this.schema(name).mediaType;
+};
+
+/**
+ * Requests
+ * These define API calls and have no side effects.  They can be run by calling
+ *     this.request(<request name>);
+ *
+ * The requests defined on the Resource class are defaults.  They can be
+ * overwritten by subclasses.
+ */
+
+/**
+ * Gets the resource.
+ * @name get
+ * @ignore
+ */
+Resource.defineRequest(Resource.prototype, 'get', function () {
+  return {
+    method: 'get',
+    url: this.url(),
+    headers: {
+      'Authorization': this.authorization(),
+      'Accept': this.mediaType(),
+      'Content-Type': this.mediaType()
+    }
+  };
+});
+
+/**
+ * Updates (puts) to the resouce.
+ * @name update
+ * @ignore
+ */
+Resource.defineRequest(Resource.prototype, 'update', function (data) {
+  return {
+    method: 'put',
+    url: this.url(),
+    content: data,
+    headers: {
+      'Authorization': this.authorization(),
+      'Accept': this.mediaType(),
+      'Content-Type': this.mediaType()
+    }
+  };
+});
+
+/**
+ * Deletes a resource.
+ * @name delete
+ * @ignore
+ */
+Resource.defineRequest(Resource.prototype, 'delete', function () {
+  return {
+    method: 'delete',
+    url: this.url(),
+    headers: {
+      'Authorization': this.authorization(),
+      'Accept': this.mediaType(),
+      'Content-Type': this.mediaType()
+    }
+  };
+});
 
 });
 
@@ -496,7 +2375,7 @@ require.define("/node_modules/underscore/package.json", function (require, modul
 });
 
 require.define("/node_modules/underscore/underscore.js", function (require, module, exports, __dirname, __filename) {
-    //     Underscore.js 1.3.0
+    //     Underscore.js 1.3.1
 //     (c) 2009-2012 Jeremy Ashkenas, DocumentCloud Inc.
 //     Underscore is freely distributable under the MIT license.
 //     Portions of Underscore are inspired or borrowed from Prototype,
@@ -560,7 +2439,7 @@ require.define("/node_modules/underscore/underscore.js", function (require, modu
   }
 
   // Current version.
-  _.VERSION = '1.3.0';
+  _.VERSION = '1.3.1';
 
   // Collection Functions
   // --------------------
@@ -578,7 +2457,7 @@ require.define("/node_modules/underscore/underscore.js", function (require, modu
       }
     } else {
       for (var key in obj) {
-        if (hasOwnProperty.call(obj, key)) {
+        if (_.has(obj, key)) {
           if (iterator.call(context, obj[key], key, obj) === breaker) return;
         }
       }
@@ -587,7 +2466,7 @@ require.define("/node_modules/underscore/underscore.js", function (require, modu
 
   // Return the results of applying the iterator to each element.
   // Delegates to **ECMAScript 5**'s native `map` if available.
-  _.map = function(obj, iterator, context) {
+  _.map = _.collect = function(obj, iterator, context) {
     var results = [];
     if (obj == null) return results;
     if (nativeMap && obj.map === nativeMap) return obj.map(iterator, context);
@@ -1004,7 +2883,7 @@ require.define("/node_modules/underscore/underscore.js", function (require, modu
     hasher || (hasher = _.identity);
     return function() {
       var key = hasher.apply(this, arguments);
-      return hasOwnProperty.call(memo, key) ? memo[key] : (memo[key] = func.apply(this, arguments));
+      return _.has(memo, key) ? memo[key] : (memo[key] = func.apply(this, arguments));
     };
   };
 
@@ -1110,7 +2989,7 @@ require.define("/node_modules/underscore/underscore.js", function (require, modu
   _.keys = nativeKeys || function(obj) {
     if (obj !== Object(obj)) throw new TypeError('Invalid object');
     var keys = [];
-    for (var key in obj) if (hasOwnProperty.call(obj, key)) keys[keys.length] = key;
+    for (var key in obj) if (_.has(obj, key)) keys[keys.length] = key;
     return keys;
   };
 
@@ -1133,7 +3012,7 @@ require.define("/node_modules/underscore/underscore.js", function (require, modu
   _.extend = function(obj) {
     each(slice.call(arguments, 1), function(source) {
       for (var prop in source) {
-        if (source[prop] !== void 0) obj[prop] = source[prop];
+        obj[prop] = source[prop];
       }
     });
     return obj;
@@ -1231,17 +3110,17 @@ require.define("/node_modules/underscore/underscore.js", function (require, modu
       if ('constructor' in a != 'constructor' in b || a.constructor != b.constructor) return false;
       // Deep compare objects.
       for (var key in a) {
-        if (hasOwnProperty.call(a, key)) {
+        if (_.has(a, key)) {
           // Count the expected number of properties.
           size++;
           // Deep compare each member.
-          if (!(result = hasOwnProperty.call(b, key) && eq(a[key], b[key], stack))) break;
+          if (!(result = _.has(b, key) && eq(a[key], b[key], stack))) break;
         }
       }
       // Ensure that both objects contain the same number of properties.
       if (result) {
         for (key in b) {
-          if (hasOwnProperty.call(b, key) && !(size--)) break;
+          if (_.has(b, key) && !(size--)) break;
         }
         result = !size;
       }
@@ -1260,7 +3139,7 @@ require.define("/node_modules/underscore/underscore.js", function (require, modu
   // An "empty" object has no enumerable own-properties.
   _.isEmpty = function(obj) {
     if (_.isArray(obj) || _.isString(obj)) return obj.length === 0;
-    for (var key in obj) if (hasOwnProperty.call(obj, key)) return false;
+    for (var key in obj) if (_.has(obj, key)) return false;
     return true;
   };
 
@@ -1286,7 +3165,7 @@ require.define("/node_modules/underscore/underscore.js", function (require, modu
   };
   if (!_.isArguments(arguments)) {
     _.isArguments = function(obj) {
-      return !!(obj && hasOwnProperty.call(obj, 'callee'));
+      return !!(obj && _.has(obj, 'callee'));
     };
   }
 
@@ -1334,6 +3213,11 @@ require.define("/node_modules/underscore/underscore.js", function (require, modu
   // Is a given variable undefined?
   _.isUndefined = function(obj) {
     return obj === void 0;
+  };
+
+  // Has own property?
+  _.has = function(obj, key) {
+    return hasOwnProperty.call(obj, key);
   };
 
   // Utility Functions
@@ -1390,6 +3274,12 @@ require.define("/node_modules/underscore/underscore.js", function (require, modu
   // guaranteed not to match.
   var noMatch = /.^/;
 
+  // Within an interpolation, evaluation, or escaping, remove HTML escaping
+  // that had been previously added.
+  var unescape = function(code) {
+    return code.replace(/\\\\/g, '\\').replace(/\\'/g, "'");
+  };
+
   // JavaScript micro-templating, similar to John Resig's implementation.
   // Underscore templating handles arbitrary delimiters, preserves whitespace,
   // and correctly escapes quotes within interpolated code.
@@ -1400,15 +3290,13 @@ require.define("/node_modules/underscore/underscore.js", function (require, modu
       str.replace(/\\/g, '\\\\')
          .replace(/'/g, "\\'")
          .replace(c.escape || noMatch, function(match, code) {
-           return "',_.escape(" + code.replace(/\\'/g, "'") + "),'";
+           return "',_.escape(" + unescape(code) + "),'";
          })
          .replace(c.interpolate || noMatch, function(match, code) {
-           return "'," + code.replace(/\\'/g, "'") + ",'";
+           return "'," + unescape(code) + ",'";
          })
          .replace(c.evaluate || noMatch, function(match, code) {
-           return "');" + code.replace(/\\'/g, "'")
-                              .replace(/[\r\n\t]/g, ' ')
-                              .replace(/\\\\/g, '\\') + ";__p.push('";
+           return "');" + unescape(code).replace(/[\r\n\t]/g, ' ') + ";__p.push('";
          })
          .replace(/\r/g, '\\r')
          .replace(/\n/g, '\\n')
@@ -1486,6 +3374,67 @@ require.define("/node_modules/underscore/underscore.js", function (require, modu
   };
 
 }).call(this);
+
+});
+
+require.define("/node_modules/shred/package.json", function (require, module, exports, __dirname, __filename) {
+    module.exports = {"main":"./lib/shred.js"}
+});
+
+require.define("/node_modules/shred/lib/shred.js", function (require, module, exports, __dirname, __filename) {
+    // Shred is an HTTP client library intended to simplify the use of Node's
+// built-in HTTP library. In particular, we wanted to make it easier to interact
+// with HTTP-based APIs.
+// 
+// See the [examples](./examples.html) for more details.
+
+var _ = require("underscore")
+// Ax is a nice logging library we wrote. You can use any logger, providing it
+// has `info`, `warn`, `debug`, and `error` methods that take a string.
+  , Ax = require("ax")
+  , CookieJarLib = require( "cookiejar" )
+  , CookieJar = CookieJarLib.CookieJar
+;
+
+// Shred takes some options, including a logger and request defaults.
+
+var Shred = function(options) {
+  options = (options||{});
+  this.agent = options.agent;
+  this.defaults = options.defaults||{};
+  this.log = options.logger||(new Ax({ level: "info" }));
+  this._sharedCookieJar = new CookieJar();
+};
+
+// Most of the real work is done in the request and reponse classes.
+ 
+Shred.Request = require("./shred/request");
+Shred.Response = require("./shred/response");
+
+// The `request` method kicks off a new request, instantiating a new `Request`
+// object and passing along whatever default options we were given.
+
+Shred.prototype = {
+  request: function(options) {
+    options.logger = this.log;
+    options.cookieJar = ( 'cookieJar' in options ) ? options.cookieJar : this._sharedCookieJar; // let them set cookieJar = null
+    options.agent = options.agent || this.agent;
+    return new Shred.Request(_.defaults(options,this.defaults));
+  }
+};
+
+// Define a bunch of convenience methods so that you don't have to include
+// a `method` property in your request options.
+
+"get put post delete".split(" ").forEach(function(method) {
+  Shred.prototype[method] = function(options) {
+    options.method = method;
+    return this.request(options);
+  };
+});
+
+
+module.exports = Shred;
 
 });
 
@@ -2074,6 +4023,8 @@ var HTTP = require("http")
   , Content = require("./content")
 ;
 
+var STATUS_CODES = HTTP.STATUS_CODES;
+
 // The Shred object itself constructs the `Request` object. You should rarely
 // need to do this directly.
 
@@ -2179,7 +4130,7 @@ Object.defineProperties(Request.prototype, {
         if (typeof value === 'object') {
           value = stringify(value);
         }
-        this._query = "?" + value;
+        this._query = value;
       } else {
         this._query = "";
       }
@@ -2300,6 +4251,8 @@ var processOptions = function(request,options) {
   // We'll use `request.emitter` to manage the `on` event handlers.
   request.emitter = (new Emitter);
 
+  request.agent = options.agent;
+
   // Set up the handlers ...
   if (options.on) {
     _(options.on).each(function(value,key) {
@@ -2368,12 +4321,15 @@ var createRequest = function(request) {
     host: request.host,
     port: request.port,
     method: request.method,
-    path: request.path+request.query,
+    path: request.path + (request.query ? '?'+request.query : ""),
     headers: request.getHeaders(),
     // Node's HTTP/S modules will ignore this, but we are using the
     // browserify-http module in the browser for both HTTP and HTTPS, and this
     // is how you differentiate the two.
-    scheme: request.scheme
+    scheme: request.scheme,
+    // Use a provided agent.  'Undefined' is the default, which uses a global
+    // agent.
+    agent: request.agent
   };
 
   var http = request.scheme == "http" ? HTTP : HTTPS;
@@ -2397,13 +4353,16 @@ var createRequest = function(request) {
       // finally to the more general `response` handler. In the last case, we
       // need to first make sure we're not dealing with a a redirect.
       var emit = function(event) {
-        if (request.emitter.listeners(response.status).length>0) {
-          request.emitter.emit(response.status,response);
+        var emitter = request.emitter;
+        var textStatus = STATUS_CODES[response.status] ? STATUS_CODES[response.status].toLowerCase() : null;
+        if (emitter.listeners(response.status).length > 0 || emitter.listeners(textStatus).length > 0) {
+          emitter.emit(response.status, response);
+          emitter.emit(textStatus, response);
         } else {
-          if (request.emitter.listeners(event).length>0) {
-            request.emitter.emit(event,response);
+          if (emitter.listeners(event).length>0) {
+            emitter.emit(event, response);
           } else if (!response.isRedirect) {
-            request.emitter.emit("response",response);
+            emitter.emit("response", response);
             console.warn("Request has no event listener for status code " + response.status);
           }
         }
@@ -2900,6 +4859,8 @@ require.define("/node_modules/shred/lib/shred/response.js", function (require, m
 var _ = require("underscore")
   , Content = require("./content")
   , HeaderMixins = require("./mixins/headers")
+  , CookieJarLib = require( "cookiejar" )
+  , Cookie = CookieJarLib.Cookie
 ;
 
 // Browser doesn't have zlib.
@@ -2916,7 +4877,7 @@ try {
 // and then use the callback to let the request know when it's ready.
 var Response = function(raw, request, callback) { 
   var response = this;
-  this._raw = raw; 
+  this._raw = raw;
 
   // The `._setHeaders` method is "private"; you can't otherwise set headers on
   // the response.
@@ -2924,16 +4885,34 @@ var Response = function(raw, request, callback) {
   
   // store any cookies
   if (request.cookieJar && this.getHeader('set-cookie')) {
-    var cookies = this.getHeader('set-cookie');
-    for (var cookieIndex = 0; cookieIndex < cookies.length; ++cookieIndex) {
-        if (!cookies[cookieIndex].match(/domain\=/i)) {
-            cookies[cookieIndex] += '; domain=' + request.host;
+    var cookieStrings = this.getHeader('set-cookie');
+    var cookieObjs = []
+      , cookie;
+
+    for (var i = 0; i < cookieStrings.length; i++) {
+      var cookieString = cookieStrings[i];
+      if (!cookieString) {
+        continue;
+      }
+
+      if (!cookieString.match(/domain\=/i)) {
+        cookieString += '; domain=' + request.host;
+      }
+
+      if (!cookieString.match(/path\=/i)) {
+        cookieString += '; path=' + request.path;
+      }
+
+      try {
+        cookie = new Cookie(cookieStr);
+        if (cookie) {
+          cookieObjs.push(cookie);
         }
-        
-        if (!cookies[cookieIndex].match(/path\=/i)) {
-            cookies[cookieIndex] += '; path=' + request.path;
-        }
+      } catch (e) {
+        console.warn("Tried to set bad cookie: " + cookieString);
+      }
     }
+
     request.cookieJar.setCookies(cookies);
   }
 
@@ -3047,6 +5026,16 @@ Object.defineProperties(Response.prototype, {
 // Add in the [getters for accessing the normalized headers](./headers.js).
 HeaderMixins.getters(Response);
 HeaderMixins.privateSetters(Response);
+
+// Work around Mozilla bug #608735 [https://bugzil.la/608735], which causes
+// getAllResponseHeaders() to return {} if the response is a CORS request.
+// xhr.getHeader still works correctly.
+var getHeader = Response.prototype.getHeader;
+Response.prototype.getHeader = function (name) {
+  return (getHeader.call(this,name) ||
+    (typeof this._raw.getHeader === 'function' && this._raw.getHeader(name)));
+};
+
 module.exports = Response;
 
 });
@@ -3341,782 +5330,1014 @@ module.exports = {
 };
 });
 
-require.define("/spire/requests.js", function (require, module, exports, __dirname, __filename) {
-    // # ResponseError
-//
-// ResponseError is a wrapper for request errors, this makes it easier to pass an
-// error to the callbacks of the async functions that still retain their extra
-// contextual information passed into the `arguments` of `requests`'s `error`
-// handler
-var ResponseError = function (response) {
-  this.name = 'ResponseError';
-  this.message = 'ResponseError';
+require.define("/spire/api/response_error.js", function (require, module, exports, __dirname, __filename) {
+    /**
+ * @fileOverview ResponseError class definition
+ */
+
+/**
+ * ResponseError is a wrapper for request errors, this makes it easier to pass
+ * an error to the callbacks of the async functions that still retain their
+ * extra contextual information passed into the arguments of requests's error
+ * handler
+ *
+ * @class HTTP Response Error
+ * @constructor
+ * @param {object} response Response HTTP client
+ * @param {object} request Request description
+ */
+var ResponseError = function (response, request) {
+  this.message = 'ResponseError: ' + response.status;
   this.response = response;
   this.status = response.status;
+  this.request = request;
 };
 
 ResponseError.prototype = new Error();
 
-// # Requests
-var Requests = function (spire) {
-  this.description = new Description(spire);
-  this.sessions = new Sessions(spire);
-  this.channels = new Channels(spire);
-  this.subscriptions = new Subscriptions(spire);
-  this.messages = new Messages(spire);
-  this.accounts = new Accounts(spire);
-  this.billing = new Billing(spire);
-};
+module.exports = ResponseError;
 
-module.exports = Requests;
+});
 
-var Description = function (spire) {
-  this.spire = spire;
-};
+require.define("/spire/api/account.js", function (require, module, exports, __dirname, __filename) {
+    /**
+ * @fileOverview Account Resource class definition
+ */
 
-// ## Description.get
-//
-// Gets the description resource object and caches it for later, the
-// `callback` is triggered with an `error` object and the `description`
-// resource object.
-Description.prototype.get = function (callback) {
-  var spire = this.spire;
-  // If discovery has already happened use the cache.
-  if (spire.resources) {
-    var description = { resources: spire.resources
-        , schema: spire.schema
-        }
-    ;
-
-    return callback(null, description);
-  }
-
-  // If there isn't a cache make an XHR to get the description.
-  spire.shred.get({
-    url: spire.options.url,
-    headers: {
-    accept: "application/json"
-  },
-  on: {
-        error: function(response){
-          var error = new ResponseError(response);
-          callback(error);
-        },
-
-        success: function(response){
-          spire.resources = response.body.data.resources;
-          spire.schema = response.body.data.schema;
-
-          callback(null, response.body.data);
-        }
-      }
-  });
-};
-
-var Sessions = function (spire) {
-  this.spire = spire;
-};
-
-Sessions.prototype.get = function(session, callback){
-  var spire = this.spire;
-  spire.shred.get({
-    url: session.url,
-    headers: {
-      'Accept': spire.headers.mediaType('session'),
-      'Authorization': spire.headers.authorization(session)
-    },
-    on: {
-      error: function(response){
-        var error = new ResponseError(response);
-        callback(error);
-      },
-      success: function(response){
-        callback(null, response.body.data);
-      }
-    }
-  });
-};
-
-Sessions.prototype.create = function(options, callback){
-  var spire = this.spire;
-  if (! options.key && (typeof options.email !== 'string' && typeof options.password !== 'string')){
-    var message = [ 'You need a key to do that! Try doing this:'
-        , '   spire.options.key = <your account key>'
-        ].join('\n');
-    ;
-
-    throw new Error(message);
-  }
-
-  if (options.email && options.password) options.key = null;
-
-  spire.shred.post({
-    url: spire.resources.sessions.url,
-    headers: {
-      'Content-Type': spire.headers.mediaType('account'),
-      'Accept': spire.headers.mediaType('session')
-    },
-    content: options,
-    on: {
-      error: function(response){
-        var error = new ResponseError(response);
-        callback(error);
-      },
-      success: function(response){
-        callback(null, response.body.data);
-      }
-    }
-  });
-};
-
-var Channels = function (spire) {
-  this.spire = spire;
-};
-
-Channels.prototype.get = function(channel, callback){
-  var spire = this.spire;
-  spire.shred.get({
-    url: channel.url,
-    headers: {
-      'Authorization': spire.headers.authorization(channel),
-      'Accept': spire.headers.mediaType('channel')
-    },
-    on: {
-      error: function(response){
-        var error = new ResponseError(response);
-        callback(error);
-      },
-      success: function(response){
-        callback(null, response.body.data);
-      }
-    }
-  });
-};
-
-Channels.prototype.getAll = function(options, callback){
-  var spire = this.spire;
-  var channels = spire.session.resources.channels;
-
-  spire.shred.get({
-    url: channels.url,
-    headers: {
-      'Authorization': spire.headers.authorization(channels),
-      'Accept': spire.headers.mediaType('channels')
-    },
-    on: {
-      error: function(response){
-        var error = new ResponseError(response);
-        callback(error);
-      },
-      success: function(response){
-        callback(null, response.body.data);
-      }
-    }
-  });
-};
-
-Channels.prototype.getByName = function(options, callback){
-  var spire = this.spire;
-  var channels = spire.session.resources.channels
-    , name = options.name
+var Resource = require('./resource')
   ;
 
-  spire.shred.get({
-    url: channels.url,
-    headers: {
-      'Authorization': spire.headers.authorization(channels),
-      'Accept': spire.headers.mediaType('channels')
-    },
-    query: {
-      name: name
-    },
-    on: {
-      error: function(response){
-        var error = new ResponseError(response);
-        callback(error);
-      },
-      success: function(response){
-        callback(null, response.body.data);
-      }
-    }
+/**
+ * Represents an account in the spire api.
+ *
+ * @class Account resource
+ *
+ * @constructor
+ * @extends Resource
+ * @param spire {object} Spire object
+ * @param data {object} Account data from the spire api
+ */
+function Account(spire, data) {
+  this.spire = spire;
+  this.data = data;
+  this.resourceName = 'account';
+}
+
+Account.prototype = new Resource();
+
+module.exports = Account;
+
+/**
+ * Resets the account
+ *
+ * Note that this passes a session to the callback, and not an account.
+ * This is because many of the session urls will have changed.
+ *
+ * @param {function (err, session)} cb Callback
+ */
+Account.prototype.reset = function (cb) {
+  var account = this;
+  this.request('reset', function (err, sessionData) {
+    if (err) return cb(err);
+    account.data = sessionData.resources.account;
+    cb(null, sessionData);
   });
 };
 
-Channels.prototype.create = function(options, callback){
-  var spire = this.spire;
-  var channels = spire.session.resources.channels
-    , name = options.name
-  ;
+/**
+ * Updates the billing plan for the account.
+ *
+ * @param {object} info New billing plan data
+ * @param {function (err, account)} cb Callback
+ */
+Account.prototype.updateBillingSubscription = function (info, cb) {
+  var account = this;
+  this.request('update_billing_subscription', info, function (err, data) {
+    if (err) return cb(err);
+    account.data = data;
+    cb(null, account);
+  });
+};
 
-  var channel = spire
-    .session
-    .resources
-    .channels
-    .resources[name]
-  ;
+/**
+ * Requests
+ * These define API calls and have no side effects.  They can be run by calling
+ *     this.request(<request name>);
+ */
 
-  if (channel) {
-    callback(null, channel);
-    return;
-  }
-
-  spire.shred.post({
-    url: channels.url,
+/**
+ * Reset your account
+ * @name reset_key
+ * @ignore
+ */
+Resource.defineRequest(Account.prototype, 'reset', function () {
+  return {
+    method: 'post',
+    url: this.url(),
     headers: {
-      'Content-Type': spire.headers.mediaType('channel'),
-      'Accept': spire.headers.mediaType('channel'),
-      'Authorization': spire.headers.authorization(channels)
+      'Accept': this.mediaType(),
+      'Authorization': this.authorization()
+    }
+  };
+});
+
+/**
+ * Updates the billing subscription with the given data.
+ * @name update_billing_subscription
+ * @ignore
+ */
+Resource.defineRequest(Account.prototype, 'update_billing_subscription', function (info) {
+  var billing = this.data.billing;
+  return {
+    method: 'put',
+    url: billing.url,
+    content: info,
+    headers: {
+      'Accept': this.mediaType(),
+      'Content-Type': this.mediaType(),
+      'Authorization': this.authorization('invioces')
+    }
+  };
+});
+
+/**
+ * Gets the billing invoices for the account.
+ * @name billing_invoices
+ * @ignore
+ */
+Resource.defineRequest(Account.prototype, 'billing_invoices', function () {
+  var invoices = this.data.billing.invoices;
+  return {
+    method: 'get',
+    url: invoices.url,
+    headers: {
+      'Accept': "application/json",
+      'Authorization': "Capability " + invoices.capability
+    }
+  };
+});
+
+/**
+ * Gets the upcoming billing invoices for the account.
+ * @name billing_invoices_upcoming
+ * @ignore
+ */
+Resource.defineRequest(Account.prototype, 'billing_invoices_upcoming', function () {
+  var upcoming = this.data.billing.invoices.upcoming;
+  return {
+    method: 'get',
+    url: upcoming,
+    headers: {
+      'Accept': "application/json",
+      'Authorization': "Capability " + upcoming.capability
+    }
+  };
+});
+
+});
+
+require.define("/spire/api/billing.js", function (require, module, exports, __dirname, __filename) {
+    /**
+ * @fileOverview Billing Resource class definition
+ */
+
+var Resource = require('./resource');
+
+/**
+ * Represents a billing subscription in the spire api.
+ *
+ * @class Billing Resource
+ *
+ * @constructor
+ * @extends Resource
+ * @param spire {object} Spire object
+ * @param data {object} Billing data from the spire api
+ */
+function Billing(spire, data) {
+  this.spire = spire;
+  this.data = data;
+  this.resourceName = 'billing';
+}
+
+Billing.prototype = new Resource();
+
+module.exports = Billing;
+
+});
+
+require.define("/spire/api/channel.js", function (require, module, exports, __dirname, __filename) {
+    /**
+ * @fileOverview Channel Resource class definition
+ */
+var Resource = require('./resource');
+
+/**
+ * Represents a channel in the spire api.
+ *
+ * @class Channel Resource
+ *
+ * @constructor
+ * @extends Resource
+ * @param {object} spire Spire object
+ * @param {object} data  Channel data from the spire api
+ */
+function Channel(spire, data) {
+  this.spire = spire;
+  this.data = data;
+  this.resourceName = 'channel';
+}
+
+Channel.prototype = new Resource();
+
+module.exports = Channel;
+
+/**
+ * Returns the channel name.
+ *
+ * @returns {string} Channel name
+ */
+Channel.prototype.name = function () {
+  return this.data.name;
+};
+
+/**
+ * Publishes a message to the channel.
+ *
+ * The messages can be a string, or any json'able object.
+ *
+ * @example
+ * spire.channel('myChannel', function (err, channel) {
+ *   channel.publish('hello world', function (err, message) {
+ *     if (!err) {
+ *       // Message has been published.
+ *     }
+ *   });
+ * });
+ *
+ * @param {string|object} message Message to publish
+ * @param {function (err, message)} cb Callback
+ */
+Channel.prototype.publish = function (message, cb) {
+  this.request('publish', { content: message }, cb);
+};
+
+/**
+ * Gets a subscription to a channel, creating it if necessary.
+ *
+ * @example
+ * spire.channel('myChannel', function (err, channel) {
+ *   channel.subscription('mySubscription', function (err, subscription) {
+ *     if (!err) {
+ *       // `subscription` is the new subscription.
+ *     }
+ *   });
+ * });
+ *
+ * @param {string} subName Subscription name
+ * @param {function (err, subscription)} cb Callback
+ */
+Channel.prototype.subscription = function (subName, cb) {
+  if (!cb) {
+    cb = subName;
+    subName = null;
+  }
+  this.spire.subscription(subName, this.name(), cb);
+};
+
+/**
+ * Requests
+ *
+ * These define API calls and have no side effects.  They can be run by calling
+ *     this.request(<request name>);
+ */
+
+/**
+ * @name publish
+ * @ignore
+ * Publishes a message to the channel.
+ */
+Resource.defineRequest(Channel.prototype, 'publish', function (message) {
+  return {
+    method: 'post',
+    url: this.url(),
+    headers: {
+      'Authorization': this.authorization(),
+      'Accept': this.mediaType('message'),
+      'Content-Type': this.mediaType('message')
     },
+    content: message
+  };
+});
+
+});
+
+require.define("/spire/api/session.js", function (require, module, exports, __dirname, __filename) {
+    /**
+ * @fileOverview Session Resource class definition
+ */
+
+var Resource = require('./resource')
+  , Account = require('./account')
+  , Channel = require('./channel')
+  , Subscription = require('./subscription')
+  , _ = require('underscore')
+  ;
+
+/**
+ * Represents a session in the spire api.
+ *
+ * <p>Sessions contain other resources, like channels and subscriptions.  These
+ * can be accessed in the <code>session.resources</code> object.</p>
+ *
+ * <p>One important resource inside <code>session</code> is the account resource
+ * <code>session.account</code>, which is only given to sessions authenticated
+ * with an email and password.  The account resource is documented in its own
+ * class.</p>
+ *
+ * <p>Session objects maintain lists of channels and subscriptions.  If you call
+ * the <code>session.channels</code> or <code>session.subscriptions</code>
+ * methods, you will get back cached data if it exists.  Use the <code>$</code>
+ * cache-bypass methods: <code>session.channels$</code> and
+ * <code>session.subscriptions$</code> to get fresh data from the api.</p>
+ *
+ * @class Session Resource
+ *
+ * @constructor
+ * @extends Resource
+ * @param {object} spire Spire object
+ * @param {object} data Session data from the spire api
+ */
+function Session(spire, data) {
+  this.spire = spire;
+  this.data = data;
+  this.resourceName = 'session';
+
+  this._channels = {};
+  this._subscriptions = {};
+
+	this._storeResources();
+
+}
+
+Session.prototype = new Resource();
+
+module.exports = Session;
+
+/**
+ * <p>Gets the Session resource.
+ *
+ * @param {function (err, session)} cb Callback
+ */
+Session.prototype.get = function (cb) {
+  var session = this;
+  this.request('get', function (err, data) {
+    if (err) return cb(err);
+    session.data = data;
+    session._storeResources();
+    cb(null, session);
+  });
+};
+
+/**
+ * Gets the account resource.  Only available to sessions that are authenticated
+ * with an email and password.
+ *
+ * Returns a value from the cache, if one if available.
+ *
+ * @example
+ * spire.session.account(function (err, account) {
+ *   if (!err) {
+ *     // `account` is account resource.
+ *   }
+ * });
+ *
+ * @param {function (err, account)} cb Callback
+ */
+Session.prototype.account = function (cb) {
+  if (this._account) return cb(null, this._account);
+  this.account$(cb);
+};
+
+/**
+ * Gets the account resource.  Only available to sessions that are authenticated
+ * with an email and password.
+ *
+ * Always gets a fresh value from the api.
+ *
+ * @example
+ * spire.session.account$(function (err, account) {
+ *   if (!err) {
+ *     // `account` is account resource.
+ *   }
+ * });
+ * @param {function (err, account)} cb Callback
+ */
+Session.prototype.account$ = function (cb) {
+  var session = this;
+  this.request('account', function (err, account) {
+    if (err) return cb(err);
+    session._account = new Account(session.spire, account);
+    cb(null, session._account);
+  });
+};
+
+/**
+ * Resets the account resource.  Only available to sessions that are authenticated
+ * with an email and password.
+ * *
+ * @example
+ * spire.session.resetAccount(function (err, session) {
+ *   if (!err) {
+ *     // `session` is session with new account resource.
+ *   }
+ * });
+ * @param {function (err, session)} cb Callback
+ */
+Session.prototype.resetAccount = function (cb) {
+  var session = this;
+  this._account.reset(function (err, sessionData) {
+    if (err) return cb(err);
+		session.data = sessionData;
+		session._storeResources();
+    cb(null, session);
+  });
+};
+
+/**
+ * Gets the channels collection.  Returns a hash of Channel resources.
+ *
+ * Returns a value from the cache, if one if available.
+ *
+ * @example
+ * spire.session.channels(function (err, channels) {
+ *   if (!err) {
+ *     // `channels` is a hash of all the account's channels
+ *   }
+ * });
+ *
+ * @param {function (err, channels)} cb Callback
+ */
+Session.prototype.channels = function (cb) {
+  if (this._channels) return cb(null, this._channels);
+  this.channels$(cb);
+};
+
+/**
+ * Gets the channels collection.  Returns a hasg of Channel resources.
+ *
+ * Always gets a fresh value from the api.
+ *
+ * @example
+ * spire.session.channels$(function (err, channels) {
+ *   if (!err) {
+ *     // `channels` is a hash of all the account's channels
+ *   }
+ * });
+ *
+ * @param {function (err, channels)} cb Callback
+ */
+Session.prototype.channels$ = function (cb) {
+  var session = this;
+  this.request('channels', function (err, channelsData) {
+    if (err) return cb(err);
+    _.each(channelsData, function (channel, name) {
+      session._memoizeChannel(new Channel(session.spire, channel));
+    });
+    cb(null, session._channels);
+  });
+};
+
+/**
+ * Gets the subscriptions collection.  Returns a hash of Subscription resources.
+ *
+ * Returns a value from the cache, if one if available.
+ *
+ * @example
+ * spire.session.subscriptions(function (err, subscriptions) {
+ *   if (!err) {
+ *     // `subscriptions` is a hash of all the account's subscriptions
+ *   }
+ * });
+ *
+ * @param {function (err, channels)} cb Callback
+ */
+Session.prototype.subscriptions = function (cb) {
+  if (this._subscriptions) return cb(null, this._subscriptions);
+  this.subscriptions$(cb);
+};
+
+/**
+ * Gets the subscriptions collection.  Returns a hash of Subscription resources.
+ *
+ * Always gets a fresh value from the api.
+ *
+ * @example
+ * spire.session.subscriptions$(function (err, subscriptions) {
+ *   if (!err) {
+ *     // `subscriptions` is a hash of all the account's subscriptions
+ *   }
+ * });
+ *
+ * @param {function (err, channels)} cb Callback
+ */
+Session.prototype.subscriptions$ = function (cb) {
+  var session = this;
+  this.request('subscriptions', function (err, subscriptions) {
+    if (err) return cb(err);
+    _.each(subscriptions, function (subscription, name) {
+      session._memoizeSubscription(new Subscription(session.spire, subscription));
+    });
+    cb(null, session._subscriptions);
+  });
+};
+
+/**
+ * Creates a channel.  Returns a Channel resource.  Errors if a channel with the
+ * specified name exists.
+ *
+ * @param {string} name Channel name
+ * @param {function (err, channel)} cb Callback
+ */
+Session.prototype.createChannel = function (name, cb) {
+  var session = this;
+  this.request('create_channel', name, function (err, data) {
+    if (err) return cb(err);
+    var channel = new Channel(session.spire, data);
+    session._memoizeChannel(channel);
+    cb(null, channel);
+  });
+};
+
+/**
+ * Creates a subscription to any number of channels.  Returns a Subscription
+ * resource.  Errors if a subscription with the specified name exists.
+ *
+ * @param {string} name Subscription name
+ * @param {array} channelNames Array of channel names to subscribe to.  Can be empty.
+ * @param {function (err, subscription)} cb Callback
+ */
+Session.prototype.createSubscription = function (subName, channelNames, cb) {
+  var session = this;
+  this.channels(function (channels) {
+    var channelUrls = _.map(channelNames, function (name) {
+      return session._channels[name].url();
+    });
+    session.request('create_subscription', subName, channelUrls, function (err, sub) {
+      if (err) return cb(err);
+      var subscription = new Subscription(session.spire, sub);
+      session._memoizeSubscription(subscription);
+      cb(null, subscription);
+    });
+  });
+};
+
+ /**
+ * Stores the channel resource in a hash by its name.
+ *
+ * @param channel {object} Channel to store
+ */
+Session.prototype._memoizeChannel = function (channel) {
+  this._channels[channel.name()] = channel;
+};
+
+/**
+ * Stores the subscription resource in a hash by its name.
+ *
+ * @param subscription {object} Subscription to store
+ */
+Session.prototype._memoizeSubscription = function (subscription) {
+  this._subscriptions[subscription.name()] = subscription;
+};
+
+/**
+ * Stores the resources.
+ */
+Session.prototype._storeResources = function () {
+  var session = this;
+	var resources = {};
+  _.each(this.data.resources, function (resource, name) {
+    // Turn the account object into an instance of Resource.
+    if (name === 'account') {
+      resource = new Account(session.spire, resource);
+      session._account = resource;
+    }
+    resources[name] = resource;
+  });
+
+  this.resources = resources;
+};
+/**
+ * Requests
+ * These define API calls and have no side effects.  They can be run by calling
+ *     this.request(<request name>);
+ */
+
+/**
+ * Gets the account resource.
+ * @name account
+ * @ignore
+ */
+Resource.defineRequest(Session.prototype, 'account', function () {
+  var resource = this.data.resources.account;
+  return {
+    method: 'get',
+    url: resource.url,
+    headers: {
+      'Authorization': this.authorization(resource),
+      'Accept': this.mediaType('account')
+    }
+  };
+});
+
+/**
+ * Gets the channels collection.
+ * @name channels
+ * @ignore
+ */
+Resource.defineRequest(Session.prototype, 'channels', function () {
+  var collection = this.data.resources.channels;
+  return {
+    method: 'get',
+    url: collection.url,
+    headers: {
+      'Authorization': this.authorization(collection),
+      'Accept': this.mediaType('channels')
+    }
+  };
+});
+
+/**
+ * Gets a channel by name.  Returns a collection with a single value: { name: channel }.
+ * @name channel_by_name
+ * @ignore
+ */
+Resource.defineRequest(Session.prototype, 'channel_by_name', function (name) {
+  var collection = this.data.resources.channels;
+  return {
+    method: 'get',
+    url: collection.url,
+    query: { name: name },
+    headers: {
+      'Authorization': this.authorization(collection),
+      'Accept': this.mediaType('channels')
+    }
+  };
+});
+
+/**
+ * Creates a channel.  Returns a channel object.
+ * @name create_channel
+ * @ignore
+ */
+Resource.defineRequest(Session.prototype, 'create_channel', function (name) {
+  var collection = this.data.resources.channels;
+  return {
+    method: 'post',
+    url: collection.url,
     content: { name: name },
-    on: {
-      error: function(response){
-        var error = new ResponseError(response);
-        callback(error);
-      },
-      success: function(response){
-        spire.session.resources.channels
-          .resources[options.name] = response.body.data;
-        callback(null, response.body.data);
-      }
-    }
-  });
-};
-
-var Subscriptions = function (spire) {
-  this.spire = spire;
-};
-
-/*
-
-{
-  channels: [ channel ],
-  events: [ 'messages' ]
-}
-
-*/
-Subscriptions.prototype.create = function(options, callback){
-  var spire = this.spire;
-  var subscriptions = spire.session.resources.subscriptions
-    , data = { events: options.events
-      , channels: []
-      }
-  ;
-
-  // **!** The subscription create request wants an array of channel urls
-  // not 'channel' resource objects.
-  for (var i = 0; i < options.channels.length; i++) {
-    data.channels.push(options.channels[i].url);
-  }
-  
-  spire.shred.post({
-    url: subscriptions.url,
     headers: {
-      'Content-Type': spire.headers.mediaType('subscription'),
-      'Accept': spire.headers.mediaType('subscription'),
-      'Authorization': spire.headers.authorization(subscriptions)
-    },
-    content: data,
-    on: {
-      error: function(response){
-        var error = new ResponseError(response);
-        callback(error);
-      },
-      success: function(response){
-        callback(null, response.body.data);
-      }
+      'Authorization': this.authorization(collection),
+      'Accept': this.mediaType('channel'),
+      'Content-Type': this.mediaType('channel')
     }
-  });
-};
-
-/*
-
-{
-  timeout: ...,
-  subscription: subscription
-}
-
-*/
-Subscriptions.prototype.get = function(options, callback){
-  var spire = this.spire;
-  var subscription = options.subscription
-    data = { timeout: options.timeout || spire.options.timeout/1000 }
-  ;
-
-  if (subscription['last-message']) {
-    data['last-message'] = subscription['last-message'];
-  }
-
-  spire.shred.get({
-    url: subscription.url,
-    // timeout: options.timeout + 10000,
-    headers: {
-      'Content-Type': spire.headers.mediaType('events'),
-      'Accept': spire.headers.mediaType('events'), 
-      'Authorization': spire.headers.authorization(subscription)
-    },
-    query: data,
-    on: {
-      timeout: function(response) {
-        // fake a returned events object
-        callback(null, { messages: [] });
-      },
-      error: function(response){
-        var error = new ResponseError(response);
-        callback(error);          
-      },
-      success: function(response){
-        var messageCount = response.body.data.messages.length
-        if (messageCount > 0){
-          subscription['last-message'] =
-            response.body.data.messages[0].timestamp;
-        }
-        callback(null, response.body.data);
-      }
-    }
-  });
-};
-
-var Messages = function (spire) {
-  this.spire = spire;
-}
-
-// { channel: {}, content: .. }
-Messages.prototype.create = function(options, callback){
-  var spire = this.spire;
-  var channel = options.channel
-    , content = options.content
-  ;
-  
-  spire.shred.post({
-    url: channel.url,
-    headers: {
-      'Content-Type': spire.headers.mediaType('message'),
-      'Accept': spire.headers.mediaType('message'),
-      'Authorization': spire.headers.authorization(channel)
-    },
-    content: { content: content },
-    on: {
-      error: function(response){
-        var error = new ResponseError(response);
-        callback(error);
-      },
-      success: function(response){
-        callback(null, response.body.data);
-      }
-    }
-  });
-};
-
-var Accounts = function (spire) {
-  this.spire = spire;
-};
-
-Accounts.prototype.create = function(account, callback){
-  var spire = this.spire;
-  spire.shred.post({
-    url: spire.resources.accounts.url,
-    headers: {
-      'Content-Type': spire.headers.mediaType('account'),
-      'Accept': spire.headers.mediaType('session')
-    },
-    content: account,
-    on: {
-      error: function(response){
-        var error = new ResponseError(response);
-        callback(error);
-      },
-      success: function(response){
-        spire.session = response.body.data;
-        callback(null, response.body.data);
-      }
-    }
-  });
-};
-
-Accounts.prototype.update = function(account, callback){
-  var spire = this.spire;
-  spire.shred.put({
-    url: account.url,
-    headers: {
-      'Content-Type': spire.headers.mediaType('account'),
-      'Accept': spire.headers.mediaType('account'),
-      'Authorization': spire.headers.authorization(account)
-    },
-    content: account,
-    on: {
-      error: function(response){
-        var error = new ResponseError(response);
-        callback(error);
-      },
-      success: function(response){
-        spire.session = response.body.data;
-        callback(null, response.body.data);
-      }
-    }
-  });
-};
-
-Accounts.prototype.reset = function(account, callback){
-  var spire = this.spire;
-  spire.shred.post({
-    url: account.url,
-    headers: {
-      'Content-Type': spire.headers.mediaType('account'),
-      'Accept': spire.headers.mediaType('account'),
-      'Authorization': spire.headers.authorization(account)
-    },
-    on: {
-      error: function(response){
-        var error = new ResponseError(response);
-        callback(error);
-      },
-      success: function(response){
-        spire.session = response.body.data;
-        callback(null, response.body.data);
-      }
-    }
-  });
-};
-
-var Billing = function (spire) {
-  this.spire = spire;
-};
-
-Billing.prototype.get = function(callback){
-  var spire = this.spire;
-  spire.shred.get({
-    url: spire.resources.billing.url,
-    headers: {
-      'Content-Type': spire.headers.mediaType('billing'),
-      'Accept': spire.headers.mediaType('billing')
-    },
-    on: {
-      error: function(response){
-        var error = new ResponseError(response);
-        callback(error);
-      },
-      success: function(response){
-        callback(null, response.body.data);
-      }
-    }
-  });
-};
-
+  };
 });
 
-require.define("/spire/messages.js", function (require, module, exports, __dirname, __filename) {
-    // # spire.messages
-//
-// Provides a high level interface for message publishing and subscribing.
-var Messages = function (spire) {
-  this.spire = spire;
-  this.queue = [];
-};
-
-module.exports = Messages;
-
-// ## spire.messages.subscribe
-//
-// Subscribe to a channel with the `name`, when new messages come in trigger
-// the `callback` every time. This method uses long-polling to get the
-// events from a subscription resource and wraps up all the complexities of
-// interfacing with the REST API (discovery, session creation, channel
-// creation, subscription creation, and event listening for the
-// subscription).
-//
-// The callback is triggered with two arguments, an `error` object and a
-// `messages` array
-//
-//     spire.messages.subscribe('chat example', function(err, messages){
-//       $.each(messages, function(i, message){
-//         var el = $('<div class="message">').text(message);
-//
-//         $('.messages').append(el);
-//       });
-//     });
-//
-// You can also pass in a hash of options to the subscription.  Accepted
-// options are 'limit', 'order_by', 'timeout', and 'delay'.
-//
-Messages.prototype.subscribe = function(name, subOptions, callback){
-  var spire = this.spire;
-  if (arguments.length === 2 && typeof subOptions === 'function') {
-    callback = subOptions;
-    subOptions = {};
-  }
-
-  spire.connect(function(err, session){
-    if (err) return callback(err);
-
-    var subscriptionCallCount = 0;
-
-    // Get events from the subscription
-    var get = function (options) {
-      subscriptionCallCount++;
-      if (subOptions.maxCallCount < subscriptionCallCount) {
-        return;
-      }
-
-      for (var key in subOptions) {
-        options[key] = subOptions[key];
-      }
-
-      spire.requests.subscriptions.get(options, function(err, events){
-        if (err) return callback(err);
-
-        if (events.messages.length > 0){
-          callback(null, events.messages);
-        }
-
-        // Do it all over again
-        get(options);
-      });
+/**
+ * Gets the subscriptions collection.
+ * @name subscrtiptions
+ * @ignore
+ */
+Resource.defineRequest(Session.prototype, 'subscriptions', function () {
+  var collection = this.data.resources.subscriptions;
+  return {
+    method: 'get',
+    url: collection.url,
+    headers: {
+      'Authorization': this.authorization(collection),
+      'Accept': this.mediaType('subscriptions')
     }
-
-    var channelOptions = {
-      name: name
-    };
-
-    spire.requests.channels.create(channelOptions, function(err, channel){
-      if (err) {
-        if (err.status === 409) {
-          // do nothing, the channel already exists
-        } else {
-          return callback(err);
-        }
-      }
-
-      spire.requests.channels.getByName(channelOptions, function(err, channels){
-        if (err) return callback(err);
-
-        var subCreateOptions = {
-          channels: [ channels[channelOptions.name] ],
-          events: [ 'messages' ]
-        };
-
-        spire.requests.subscriptions.create(subCreateOptions, function(err, sub){
-          if (err) return callback(err);
-
-          // Kick off long-polling
-          get({ subscription: sub });
-        });
-      });
-    });
-  });
-};
-
-
-
-// ## spire.messages.publish
-//
-// Publish a message. This method takes the `options` `channel`,
-// which is the name of the channel to publish the message to and `content`
-// which is the content of the message you want to publish. It can also take
-// an optional callback which gets called with an `error` and a `message`
-// object.
-//
-//       // Fire and forget
-//       var options = { channel: 'chat example', content: 'herow' };
-//
-//       spire.messages.publish(options);
-//
-//   Or:
-//
-//       // Do something specific to sending this message
-//       spire.messages.publish(options, function(err, message){
-//          // you should probably do something useful though
-//         if (err) throw err;
-//
-//         $('form').hide();
-//       });
-//
-Messages.prototype.publish = function(message, callback){
-  var spire = this.spire;
-  // If the `spire` is busy connecting, queue the message and return.
-  if (spire.isConnecting){
-    this.queue.push({ message: message
-    , callback: callback
-    });
-
-    return;
-  }
-
-  callback = callback || function () {};
-
-  // Connect; discover and create a session.
-  spire.connect(function(err, session){
-    if (err) return callback(err);
-
-    var channelOptions = {
-      name: message.channel
-    };
-
-    // Create the channel before sending a message to it.
-    spire.requests.channels.create(channelOptions, function(err, channel){
-      if (err) {
-        if (err.status === 409) {
-          // do nothing, the channel already exists
-        } else {
-          return callback(err);
-        }
-      }
-
-      spire.requests.channels.getByName(channelOptions, function(err, channels){
-        if (err) return callback(err);
-
-        var createOptions = {
-            channel: channels[channelOptions.name]
-          , content: message.content
-        };
-
-        // Finally send the message.
-        spire.requests.messages.create(createOptions, function(err, message){
-          if (err) return callback(err);
-
-          if (callback) callback(null, message);
-        });
-      });
-    });
-  });
-};
-
+  };
 });
 
-require.define("/spire/headers.js", function (require, module, exports, __dirname, __filename) {
-    // # spire.headers
-//
-// Helpers for generating header values for the http requests to the
-// spire.io API.
-var Headers = function (spire) {
-  this.spire = spire;
-};
-
-module.exports = Headers;
-
-// ## spire.headers.authorization
-//
-// Generate the authorization header for a resource with a capability.
-// Requires a resource object with a `capability` key.
-//
-//     authorization = spire.headers.authorization(subscription);
-//     //=> 'Capability 5iyTrZrcGw/X4LxhXJRIEn4HwFKSFB+iulVKkUjqxFq30cFBqEm'
-//
-Headers.prototype.authorization = function(resource){
-  return ['Capability', resource.capability].join(' ');
-};
-
-// ## spire.headers.mediaType
-//
-// Generate either a 'content-type' or 'authorization' header, requires a
-// string with the name of the resource so it can extract the media type
-// from the API's schema.
-//
-//     spire.headers.mediaType('channel');
-//     //=> 'application/vnd.spire-io.channel+json;version=1.0'
-Headers.prototype.mediaType = function(resourceName){
-  var spire = this.spire;
-  return spire.schema[spire.options.version][resourceName].mediaType
-};
+/**
+ * Creates a subscrtiption.  Returns a subscription object.
+ * @name create_subscription
+ * @ignore
+ */
+Resource.defineRequest(Session.prototype, 'create_subscription', function (name, channelUrls) {
+  var collection = this.data.resources.subscriptions;
+  return {
+    method: 'post',
+    url: collection.url,
+    content: {
+      name: name,
+      channels: channelUrls
+    },
+    headers: {
+      'Authorization': this.authorization(collection),
+      'Accept': this.mediaType('subscription'),
+      'Content-Type': this.mediaType('subscription')
+    }
+  };
+});
 
 
 });
 
-require.define("/spire/accounts.js", function (require, module, exports, __dirname, __filename) {
-    // # spire.accounts
-//
-// Provides a high level interface for accounts. This is what the spire.io
-// website uses for logging in, registration, and account updates.
-var Accounts = function (spire) {
+require.define("/spire/api/subscription.js", function (require, module, exports, __dirname, __filename) {
+    /**
+ * @fileOverview Subscription Resource class definition
+ */
+
+var Resource = require('./resource')
+  , _ = require('underscore')
+  , async = require('async')
+  ;
+
+/**
+ * Represents a subscription in the spire api.
+ *
+ * <p>There are a few ways to get messages from a subscription.
+ *
+ * <p>The first is to call <code>subscription.retrieveMessages</code> directly.
+ * This is the most general method, and supports a number of options.
+ *
+ * <p>There are convenience methods <code>subscription.poll</code and
+ * <code>subscription.longPoll</code> which wrap <code>retrieveMessages</code>.
+ * The only difference is that <code>subscription.poll</code> has a timeout of
+ * 0, so the request will always come back right away, while
+ * <code>subscription.longPoll</code> has a 30 second timeout, so the request
+ * will wait up to 30 seconds for new messages to arrive before returning.
+ *
+ * <p>You can also use the <code>message</code> and <code>messages</code> events to
+ * listen for new messages on the subscription.
+ *
+ * <p><pre><code>
+ *    subscription.addListener('message', function (message) {
+ *      console.log('Message received: ' + message.content);
+ *    });
+ *
+ *    subscription.addListener('messages', function (messages) {
+ *      console.log('Received ' + messages.length + ' messages.');
+ *    });
+ *
+ *    subscription.startListening();
+ * </code></pre>
+ * </p>
+ *
+ * <p>The `messages` event fires first and contains the all the messages that were
+ * received in a single request.  The `message` event fires once per message.
+ *
+ * @class Subscription Resource
+ *
+ * @constructor
+ * @extends Resource
+ * @param {object} spire Spire object
+ * @param {object} data Subscription data from the spire api
+ */
+function Subscription(spire, data) {
   this.spire = spire;
+  this.data = data;
+  this.resourceName = 'subscription';
+
+  this.last = null;
+  this.listening = false;
+}
+
+Subscription.prototype = new Resource();
+
+module.exports = Subscription;
+
+/**
+ * Gets the name of the subscription.
+ *
+ * @returns {string} Name
+ */
+Subscription.prototype.name = function () {
+  return this.data.name;
 };
 
-module.exports = Accounts;
+/**
+ * Starts long polling for the subscription.
+ *
+ * <p>The <code>message</code> and <code>messages</code> events will fire when a
+ * request comes back with messages.  The <code>message</code> event will fire
+ * once per message, while the <code>messages</code> event fires every time a
+ * request comes back with more than one message.
+ *
+ * @example
+ * subscription.addListener('message', function (message) {
+ *   console.log('Message received: ' + message.content);
+ * });
+ *
+ * subscription.addListener('messages', function (messages) {
+ *   console.log('Received ' + messages.length + ' messages.');
+ * });
+ *
+ * subscription.startListening();
+ *
+ * // Stop Listening after 100 seconds.
+ * setTimout(function () {
+ *   subscription.stopListening();
+ *  }, 100000);
+ *
+ * @param {object} [options] Optional options argument
+ * @param {number} [options.last] Optional last message
+ * @param {number} [options.delay] Optional delay
+ * @param {number} [options.timeout] Optional timeout
+ * @param {string} [options.orderBy] Optional ordering ('asc' or 'desc')
+ * @param {function (err, messages)} cb Callback
+ */
+Subscription.prototype.startListening = function (opts) {
+  this.listening = true;
+  this._listen(opts);
+};
 
-// ## spire.accounts.create
-//
-// Wrapper for creating an account, makes a call for the API description
-// then creates the account. It requires an account object (with at least an
-// `email` and a `password`) and a `callback`. The `callback` will be called
-// with the arguments: `error` and `session`. The `session` is a session
-// resource.
-//
-//     var account = { email: 'jxson@jxson.cc'
-//         , password: 'topsecret'
-//         }
-//     ;
-//
-//     spire.accounts.create(account, function(err, session){
-//       // seriously, do something useful with this error...
-//       if (err) throw err;
-//
-//       console.log(session);
-//     });
-//
-Accounts.prototype.create = function(account, callback){
-  var spire = this.spire;
-  spire.requests.description.get(function(err, description){
-    if (err) return callback(err);
+/**
+ * Stops listening on the subscription.
+ */
+Subscription.prototype.stopListening = function () {
+  this.listening = false;
+};
 
-    spire.requests.accounts.create(account, callback);
+/**
+ * Gets messages for the subscription.
+ *
+ * <p>This method only makes one request.  Use
+ * <code>subscription.startListening</code> to poll repeatedly.
+ *
+ * @example
+ * subscription.retrieveMessages(function (err, messages) {
+ *   if (!err) {
+ *     // `messages` is an array of messages (possably empty)
+ *   }
+ * });
+ *
+ * @param {object} [options] Optional options argument
+ * @param {number} [options.last] Optional last message
+ * @param {number} [options.delay] Optional delay
+ * @param {number} [options.timeout] Optional timeout
+ * @param {string} [options.orderBy] Optional ordering ('asc' or 'desc')
+ * @param {function (err, messages)} cb Callback
+ */
+Subscription.prototype.retrieveMessages = function (options, cb) {
+  var subscription = this;
+  if (!cb) {
+    cb = options;
+    options = {};
+  }
+
+  options.orderBy = options.orderBy || 'desc';
+
+  this.request('messages', options, function (err, messagesData) {
+    if (err) {
+      subscription.emit('error', err);
+      return cb(err);
+    }
+
+    var messages = messagesData.messages;
+
+    if (messages.length && subscription.listening) {
+      subscription.emit('messages', messages);
+      _.each(messages, function (message) {
+        subscription.emit('message', message);
+      });
+    }
+
+    cb(null, messages);
   });
 };
 
-// ## spire.accounts.update
-//
-// Wrapper for updating an account, it requires an authenticated `account`
-// resource and a `callback`. The callback will be triggered with the
-// arguments: an `error` object and an `account` resource object.
-//
-//     account.email = 'something-else@test.com';
-//
-//     spire.accounts.update(account, function(err, account){
-//       if (err) throw err;
-//
-//       console.log(account);
-//     });
-//
-Accounts.prototype.update = function(account, callback){
-  var spire = this.spire;
-  spire.requests.description.get(function(err, description){
-    if (err) return callback(err);
+/**
+ * Alias for subscription.retreiveMessages.
+ */
+Subscription.prototype.get = Subscription.prototype.retreiveMessages;
 
-    spire.requests.accounts.update(account, callback);
+/**
+ * Gets new messages for the subscription.  This method forces a 0 second
+ * timeout, so the request will come back immediately, but may have an empty
+ * array of messages if there are no new ones.
+ *
+ * <p>This method only makes one request.  Use
+ * <code>subscription.startListening</code> to poll repeatedly.
+ *
+ * @example
+ * subscription.poll(function (err, messages) {
+ *   if (!err) {
+ *     // `messages` is an array of messages (possably empty)
+ *   }
+ * });
+ *
+ * @param {object} [options] Optional options argument
+ * @param {number} [options.delay] Optional delay
+ * @param {string} [options.orderBy] Optional ordering ('asc' or 'desc')
+ * @param {function (err, messages)} cb Callback
+ */
+Subscription.prototype.poll = function (options, cb) {
+  if (!cb) {
+    cb = options;
+    options = {};
+  }
+  options.timeout = 0;
+  this.longPoll(options, cb);
+};
+
+/**
+ * Gets new messages for the subscription.
+ *
+ * <p>This method defaults to a 30 second timeout, so the request will wait up to
+ * 30 seconds for a new message to come in.  You can increase the wait time with
+ * the <code>options.timeout</code> paraameter.
+ *
+ * <p>This method only makes one request.  Use `subscription.startListening` to
+ * poll repeatedly.
+ *
+ * @example
+ * subscription.longPoll({ timeout: 60 }, function (err, messages) {
+ *   if (!err) {
+ *     // `messages` is an array of messages (possably empty)
+ *   }
+ * });
+ *
+ * @param {object} [options] Optional options argument
+ * @param {number} [options.delay] Optional delay
+ * @param {string} [options.orderBy] Optional ordering ('asc' or 'desc')
+ * @param {number} [options.timeout] Optional timeout
+ * @param {function (err, messages)} cb Callback
+ */
+Subscription.prototype.longPoll = function (options, cb) {
+  var subscription = this;
+  if (!cb) {
+    cb = options;
+    options = {};
+  }
+
+  // timeout option of 0 means no long poll,
+  // so we force it here.
+  options.last = this.last;
+  options.timeout = options.timeout || 30;
+  this.retrieveMessages(options, function (err, messages) {
+    if (err) return cb(err);
+    if (messages.length) {
+      if (options.orderBy === 'asc') {
+        subscription.last = _.first(messages).timestamp;
+      } else {
+        subscription.last = _.last(messages).timestamp;
+      }
+    }
+    cb(null, messages);
   });
 };
 
-// ## spire.accounts.authenticate
-//
-// Creates a session for a given account, expects an `account` object with
-// `password` and `email` properties and a `callback`. The callback gets
-// called with the arguments `error`, `session`
-//
-//
-//     var account = { email: 'jxson@jxson.cc'
-//         , password: 'totally-secure'
-//         }
-//     ;
-//
-//     spire.accounts.authenticate(account, function(err, session){
-//       if (err) return callback(err);
-//
-//       console.log(session);
-//     });
-//
-Accounts.prototype.authenticate = function(account, callback){
-  var spire = this.spire;
-  spire.requests.description.get(function(err, description){
-    if (err) return callback(err);
-
-    var options = { key: spire.options.key
-        , email: account.email
-        , password: account.password
-        }
-    ;
-
-    spire.requests.sessions.create(options, callback);
-  });
+/**
+ * Repeatedly polls for new messages until `subscription.stopListening` is
+ * called.
+ *
+ * You should use `subscription.startListening` instead of calling this method
+ * directly.
+ */
+Subscription.prototype._listen = function (opts) {
+  var subscription = this;
+  opts = opts || {};
+  async.whilst(
+    function () { return subscription.listening; },
+    function (cb) {
+      subscription.longPoll(opts, cb);
+    },
+    function () {}
+  );
 };
 
+/**
+ * Requests
+ *
+ * These define API calls and have no side effects.  They can be run by calling
+ *     this.request(<request name>);
+ */
+
+/**
+ * Gets the messages for the subscription, according to various parameters.
+ * @name messages
+ * @ignore
+ */
+Resource.defineRequest(Subscription.prototype, 'messages', function (options) {
+  options = options || {};
+  return {
+    method: 'get',
+    url: this.url(),
+    query: {
+      'timeout': options.timeout || 0,
+      'last-message': options.last || 0,
+      'order-by': options.orderBy || 'desc',
+      'delay': options.delay || 0
+    },
+    headers: {
+      'Authorization': this.authorization(),
+      'Accept': this.mediaType('events')
+    }
+  };
+});
 
 });
 
@@ -4182,11 +6403,67 @@ var xhrHttp = (function () {
     }
 })();
 
+http.STATUS_CODES = {
+    100 : 'Continue',
+    101 : 'Switching Protocols',
+    102 : 'Processing', // RFC 2518, obsoleted by RFC 4918
+    200 : 'OK',
+    201 : 'Created',
+    202 : 'Accepted',
+    203 : 'Non-Authoritative Information',
+    204 : 'No Content',
+    205 : 'Reset Content',
+    206 : 'Partial Content',
+    207 : 'Multi-Status', // RFC 4918
+    300 : 'Multiple Choices',
+    301 : 'Moved Permanently',
+    302 : 'Moved Temporarily',
+    303 : 'See Other',
+    304 : 'Not Modified',
+    305 : 'Use Proxy',
+    307 : 'Temporary Redirect',
+    400 : 'Bad Request',
+    401 : 'Unauthorized',
+    402 : 'Payment Required',
+    403 : 'Forbidden',
+    404 : 'Not Found',
+    405 : 'Method Not Allowed',
+    406 : 'Not Acceptable',
+    407 : 'Proxy Authentication Required',
+    408 : 'Request Time-out',
+    409 : 'Conflict',
+    410 : 'Gone',
+    411 : 'Length Required',
+    412 : 'Precondition Failed',
+    413 : 'Request Entity Too Large',
+    414 : 'Request-URI Too Large',
+    415 : 'Unsupported Media Type',
+    416 : 'Requested Range Not Satisfiable',
+    417 : 'Expectation Failed',
+    418 : 'I\'m a teapot', // RFC 2324
+    422 : 'Unprocessable Entity', // RFC 4918
+    423 : 'Locked', // RFC 4918
+    424 : 'Failed Dependency', // RFC 4918
+    425 : 'Unordered Collection', // RFC 4918
+    426 : 'Upgrade Required', // RFC 2817
+    500 : 'Internal Server Error',
+    501 : 'Not Implemented',
+    502 : 'Bad Gateway',
+    503 : 'Service Unavailable',
+    504 : 'Gateway Time-out',
+    505 : 'HTTP Version not supported',
+    506 : 'Variant Also Negotiates', // RFC 2295
+    507 : 'Insufficient Storage', // RFC 4918
+    509 : 'Bandwidth Limit Exceeded',
+    510 : 'Not Extended' // RFC 2774
+};
+
 });
 
 require.define("/node_modules/http-browserify/lib/request.js", function (require, module, exports, __dirname, __filename) {
     var EventEmitter = require('events').EventEmitter;
 var Response = require('./response');
+var isSafeHeader = require('./isSafeHeader');
 
 var Request = module.exports = function (xhr, params) {
     var self = this;
@@ -4203,6 +6480,7 @@ var Request = module.exports = function (xhr, params) {
     
     if (params.headers) {
         Object.keys(params.headers).forEach(function (key) {
+            if (!isSafeHeader(key)) return;
             var value = params.headers[key];
             if (Array.isArray(value)) {
                 value.forEach(function (v) {
@@ -4213,7 +6491,7 @@ var Request = module.exports = function (xhr, params) {
         });
     }
     
-    var res = new Response;
+    var res = new Response(xhr);
     res.on('ready', function () {
         self.emit('response', res);
     });
@@ -4250,8 +6528,10 @@ Request.prototype.end = function (s) {
 
 require.define("/node_modules/http-browserify/lib/response.js", function (require, module, exports, __dirname, __filename) {
     var EventEmitter = require('events').EventEmitter;
+var isSafeHeader = require('./isSafeHeader');
 
-var Response = module.exports = function (res) {
+var Response = module.exports = function (xhr) {
+    this.xhr = xhr;
     this.offset = 0;
 };
 
@@ -4262,8 +6542,8 @@ var capable = {
     status2 : true
 };
 
-function parseHeaders (res) {
-    var lines = res.getAllResponseHeaders().split(/\r?\n/);
+function parseHeaders (xhr) {
+    var lines = xhr.getAllResponseHeaders().split(/\r?\n/);
     var headers = {};
     for (var i = 0; i < lines.length; i++) {
         var line = lines[i];
@@ -4294,14 +6574,24 @@ function parseHeaders (res) {
 }
 
 Response.prototype.getHeader = function (key) {
-    return this.headers[key.toLowerCase()];
+    var header = this.headers ? this.headers[key.toLowerCase()] : null;
+    if (header) return header;
+
+    // Work around Mozilla bug #608735 [https://bugzil.la/608735], which causes
+    // getAllResponseHeaders() to return {} if the response is a CORS request.
+    // xhr.getHeader still works correctly.
+    if (isSafeHeader(key)) {
+      return this.xhr.getResponseHeader(key);
+    }
+    return null;
 };
 
-Response.prototype.handle = function (res) {
-    if (res.readyState === 2 && capable.status2) {
+Response.prototype.handle = function () {
+    var xhr = this.xhr;
+    if (xhr.readyState === 2 && capable.status2) {
         try {
-            this.statusCode = res.status;
-            this.headers = parseHeaders(res);
+            this.statusCode = xhr.status;
+            this.headers = parseHeaders(xhr);
         }
         catch (err) {
             capable.status2 = false;
@@ -4311,42 +6601,77 @@ Response.prototype.handle = function (res) {
             this.emit('ready');
         }
     }
-    else if (capable.streaming && res.readyState === 3) {
+    else if (capable.streaming && xhr.readyState === 3) {
         try {
             if (!this.statusCode) {
-                this.statusCode = res.status;
-                this.headers = parseHeaders(res);
+                this.statusCode = xhr.status;
+                this.headers = parseHeaders(xhr);
                 this.emit('ready');
             }
         }
         catch (err) {}
         
         try {
-            this.write(res);
+            this.write();
         }
         catch (err) {
             capable.streaming = false;
         }
     }
-    else if (res.readyState === 4) {
+    else if (xhr.readyState === 4) {
         if (!this.statusCode) {
-            this.statusCode = res.status;
+            this.statusCode = xhr.status;
             this.emit('ready');
         }
-        this.write(res);
+        this.write();
         
-        if (res.error) {
-            this.emit('error', res.responseText);
+        if (xhr.error) {
+            this.emit('error', xhr.responseText);
         }
         else this.emit('end');
     }
 };
 
-Response.prototype.write = function (res) {
-    if (res.responseText.length > this.offset) {
-        this.emit('data', res.responseText.slice(this.offset));
-        this.offset = res.responseText.length;
+Response.prototype.write = function () {
+    var xhr = this.xhr;
+    if (xhr.responseText.length > this.offset) {
+        this.emit('data', xhr.responseText.slice(this.offset));
+        this.offset = xhr.responseText.length;
     }
+};
+
+});
+
+require.define("/node_modules/http-browserify/lib/isSafeHeader.js", function (require, module, exports, __dirname, __filename) {
+    // Taken from http://dxr.mozilla.org/mozilla/mozilla-central/content/base/src/nsXMLHttpRequest.cpp.html
+var unsafeHeaders = [
+    "accept-charset",
+    "accept-encoding",
+    "access-control-request-headers",
+    "access-control-request-method",
+    "connection",
+    "content-length",
+    "cookie",
+    "cookie2",
+    "content-transfer-encoding",
+    "date",
+    "expect",
+    "host",
+    "keep-alive",
+    "origin",
+    "referer",
+    "set-cookie",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "user-agent",
+    "via"
+];
+
+module.exports = function (headerName) {
+    if (!headerName) return false;
+    return (unsafeHeaders.indexOf(headerName.toLowerCase()) === -1)
 };
 
 });
